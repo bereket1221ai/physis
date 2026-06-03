@@ -386,7 +386,7 @@ class ValveSpring:
         """Length when spring is fully compressed (coils touching)."""
         return self.N * self.d_mm
     
-    safety_factor_clearance(self, max_lift_mm):
+    def safety_factor_clearance(self, max_lift_mm):
         """Safety factor against coil bind."""
         max_compression = self.max_compression_mm(max_lift_mm)
         return (self.L_free_mm - self.solid_length_mm()) / max_compression
