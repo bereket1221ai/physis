@@ -1,463 +1,508 @@
 """
-piston_pin.py - Chapter 32.11-32.12: Piston Pin (Wrist Pin) Design
+piston_pin.py - Complete Piston Pin (Wrist Pin) Design for IC Engines
 
-Based on Machine Design textbook (R.S. Khurmi, J.K. Gupta)
-Sections covered:
-- 32.11: Piston Pin
-- 32.12: Piston Pin (continued)
+Sources:
+- Machine Design Textbook (Chapter 32.11-32.12) - R.S. Khurmi
+- Internal Combustion Engine Fundamentals - John B. Heywood
+- Mechanical Engineering Design - Shigley & Mischke
+- SAE International standards
 
-Additional references:
-- Pin loading analysis (bending and shear)
-- Bearing pressure calculations
-- Pin materials and heat treatment
-- Pin types (semi-floating, full-floating)
-- Pin retention methods
-- Ovalization and deflection analysis
-- Lubrication and clearance
-- Fatigue life prediction
-- Manufacturing considerations
+Covers:
+- 32.11: Piston Pin introduction
+- 32.12: Piston Pin design (continued)
+- Pin loading (bending + shear)
+- Bearing pressure analysis
+- Hollow pin optimization
+- Pin materials (case hardened steel)
+- Pin retention (full-floating vs semi-floating)
+- Ovalization and deflection
+- Fatigue analysis (Goodman/Soderberg)
+- Pin offset for noise reduction
 """
 
 import math
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, Tuple, List
 
 
+# ============================================================================
+# SECTION 1: PISTON PIN MATERIALS DATABASE
+# ============================================================================
+
+@dataclass(frozen=True)
 class PistonPinMaterial:
-    """Chapter 32.11: Material properties for piston pins."""
+    """Material properties for piston pins (wrist pins)."""
     
-    MATERIALS = {
-        "Case Hardened Steel (8620)": {
-            "density_kg_m3": 7850,
-            "ultimate_tensile_mpa": 980,
-            "yield_strength_mpa": 750,
-            "fatigue_limit_mpa": 380,
-            "endurance_limit_mpa": 350,
-            "youngs_modulus_gpa": 205,
-            "hardness_core_hb": 280,
-            "hardness_surface_hb": 600,
-            "case_depth_mm": 0.8,
-            "description": "Excellent wear resistance, good fatigue strength",
-        },
-        "Case Hardened Steel (4320)": {
-            "density_kg_m3": 7850,
-            "ultimate_tensile_mpa": 1080,
-            "yield_strength_mpa": 850,
-            "fatigue_limit_mpa": 420,
-            "endurance_limit_mpa": 380,
-            "youngs_modulus_gpa": 205,
-            "hardness_core_hb": 310,
-            "hardness_surface_hb": 650,
-            "case_depth_mm": 1.0,
-            "description": "Very high strength, premium material",
-        },
-        "Through Hardened Steel (4140)": {
-            "density_kg_m3": 7850,
-            "ultimate_tensile_mpa": 950,
-            "yield_strength_mpa": 830,
-            "fatigue_limit_mpa": 400,
-            "endurance_limit_mpa": 360,
-            "youngs_modulus_gpa": 205,
-            "hardness_core_hb": 320,
-            "hardness_surface_hb": 320,
-            "case_depth_mm": 0,
-            "description": "Uniform hardness, good for semi-floating pins",
-        },
-        "High Carbon Steel (52100)": {
-            "density_kg_m3": 7830,
-            "ultimate_tensile_mpa": 1100,
-            "yield_strength_mpa": 950,
-            "fatigue_limit_mpa": 450,
-            "endurance_limit_mpa": 400,
-            "youngs_modulus_gpa": 210,
-            "hardness_core_hb": 350,
-            "hardness_surface_hb": 620,
-            "case_depth_mm": 0.5,
-            "description": "High hardness, used in racing engines",
-        },
-        "Nitrided Steel": {
-            "density_kg_m3": 7800,
-            "ultimate_tensile_mpa": 900,
-            "yield_strength_mpa": 700,
-            "fatigue_limit_mpa": 420,
-            "endurance_limit_mpa": 380,
-            "youngs_modulus_gpa": 200,
-            "hardness_core_hb": 280,
-            "hardness_surface_hb": 700,
-            "case_depth_mm": 0.4,
-            "description": "Very hard surface, excellent wear resistance",
-        },
-    }
-    
-    @classmethod
-    def get_material(cls, name):
-        """Get material properties by name."""
-        if name not in cls.MATERIALS:
-            raise ValueError(f"Unknown material: {name}. Available: {list(cls.MATERIALS.keys())}")
-        return cls.MATERIALS[name]
-    
-    @classmethod
-    def list_materials(cls):
-        """List all available piston pin materials."""
-        return list(cls.MATERIALS.keys())
+    name: str
+    density_kg_m3: float
+    ultimate_tensile_mpa: float
+    yield_strength_mpa: float
+    fatigue_limit_mpa: float
+    endurance_limit_mpa: float
+    youngs_modulus_gpa: float
+    hardness_core_hb: float
+    hardness_surface_hb: float
+    case_depth_mm: float
+    description: str
 
 
+# Piston pin material database
+PISTON_PIN_MATERIALS: Dict[str, PistonPinMaterial] = {
+    "Case Hardened Steel (8620)": PistonPinMaterial(
+        name="Case Hardened Steel (8620)",
+        density_kg_m3=7850,
+        ultimate_tensile_mpa=980,
+        yield_strength_mpa=750,
+        fatigue_limit_mpa=380,
+        endurance_limit_mpa=350,
+        youngs_modulus_gpa=205,
+        hardness_core_hb=280,
+        hardness_surface_hb=600,
+        case_depth_mm=0.8,
+        description="Excellent wear resistance, good fatigue strength",
+    ),
+    "Case Hardened Steel (4320)": PistonPinMaterial(
+        name="Case Hardened Steel (4320)",
+        density_kg_m3=7850,
+        ultimate_tensile_mpa=1080,
+        yield_strength_mpa=850,
+        fatigue_limit_mpa=420,
+        endurance_limit_mpa=380,
+        youngs_modulus_gpa=205,
+        hardness_core_hb=310,
+        hardness_surface_hb=650,
+        case_depth_mm=1.0,
+        description="Very high strength, premium material",
+    ),
+    "Through Hardened Steel (4140)": PistonPinMaterial(
+        name="Through Hardened Steel (4140)",
+        density_kg_m3=7850,
+        ultimate_tensile_mpa=950,
+        yield_strength_mpa=830,
+        fatigue_limit_mpa=400,
+        endurance_limit_mpa=360,
+        youngs_modulus_gpa=205,
+        hardness_core_hb=320,
+        hardness_surface_hb=320,
+        case_depth_mm=0,
+        description="Uniform hardness, good for semi-floating pins",
+    ),
+    "Nitrided Steel": PistonPinMaterial(
+        name="Nitrided Steel",
+        density_kg_m3=7800,
+        ultimate_tensile_mpa=900,
+        yield_strength_mpa=700,
+        fatigue_limit_mpa=420,
+        endurance_limit_mpa=380,
+        youngs_modulus_gpa=200,
+        hardness_core_hb=280,
+        hardness_surface_hb=700,
+        case_depth_mm=0.4,
+        description="Very hard surface, excellent wear resistance",
+    ),
+}
+
+
+def get_piston_pin_material(name: str) -> PistonPinMaterial:
+    """Get piston pin material by name."""
+    if name not in PISTON_PIN_MATERIALS:
+        raise ValueError(f"Unknown material: {name}. Available: {list(PISTON_PIN_MATERIALS.keys())}")
+    return PISTON_PIN_MATERIALS[name]
+
+
+# ============================================================================
+# SECTION 2: PISTON PIN GEOMETRY
+# ============================================================================
+
+@dataclass
 class PistonPinGeometry:
-    """Chapter 32.11: Piston pin geometric parameters."""
+    """Piston pin geometric parameters."""
     
-    def __init__(self, bore_mm, pin_outer_diameter_mm=None, pin_inner_diameter_mm=None,
-                 pin_length_mm=None, pin_type="full_floating"):
-        """
-        Parameters:
-        -----------
-        bore_mm : float
-            Cylinder bore diameter (mm)
-        pin_outer_diameter_mm : float, optional
-            Outer diameter of pin (default: 0.25-0.35 × bore)
-        pin_inner_diameter_mm : float, optional
-            Inner diameter of pin for hollow design (default: 0.6 × outer_diameter)
-        pin_length_mm : float, optional
-            Length of pin (default: 0.8-0.9 × bore)
-        pin_type : str
-            'full_floating' or 'semi_floating'
-        """
-        self.bore_mm = bore_mm
-        self.pin_type = pin_type
-        
+    bore_mm: float
+    outer_diameter_mm: Optional[float] = None
+    inner_diameter_mm: Optional[float] = None
+    pin_length_mm: Optional[float] = None
+    pin_type: str = "full_floating"  # full_floating or semi_floating
+    
+    def __post_init__(self):
         # Pin outer diameter (typical: 0.25 to 0.35 × bore)
-        if pin_outer_diameter_mm:
-            self.od_mm = pin_outer_diameter_mm
-        else:
-            self.od_mm = 0.28 * bore_mm
+        if self.outer_diameter_mm is None:
+            self.outer_diameter_mm = 0.28 * self.bore_mm
         
         # Pin inner diameter (hollow pin for weight reduction)
-        if pin_inner_diameter_mm:
-            self.id_mm = pin_inner_diameter_mm
-        else:
-            self.id_mm = 0.6 * self.od_mm  # Typical for hollow pins
+        if self.inner_diameter_mm is None:
+            self.inner_diameter_mm = 0.6 * self.outer_diameter_mm
         
         # Pin length (typical: 0.75 to 0.9 × bore)
-        if pin_length_mm:
-            self.length_mm = pin_length_mm
-        else:
-            self.length_mm = 0.85 * bore_mm
+        if self.pin_length_mm is None:
+            self.pin_length_mm = 0.85 * self.bore_mm
         
         # Bearing lengths
-        self.piston_boss_length_mm = 0.4 * self.length_mm
-        self.rod_small_end_length_mm = 0.5 * self.length_mm
-        
-        # Pin ends (not fully supported)
-        self.unsupported_end_length_mm = (self.length_mm - self.piston_boss_length_mm - 
-                                           self.rod_small_end_length_mm) / 2
-        
-        # Convert to meters for calculations
-        self.od_m = self.od_mm / 1000
-        self.id_m = self.id_mm / 1000
-        self.length_m = self.length_mm / 1000
+        self.piston_boss_length_mm = 0.4 * self.pin_length_mm
+        self.rod_small_end_length_mm = 0.5 * self.pin_length_mm
+        self.unsupported_end_length_mm = (
+            self.pin_length_mm - self.piston_boss_length_mm - self.rod_small_end_length_mm
+        ) / 2
     
-    def pin_area_mm2(self):
+    @property
+    def area_mm2(self) -> float:
         """Cross-sectional area of hollow pin."""
-        return math.pi * (self.od_mm**2 - self.id_mm**2) / 4
+        return math.pi * (self.outer_diameter_mm**2 - self.inner_diameter_mm**2) / 4
     
-    def pin_area_m2(self):
-        """Cross-sectional area in m²."""
-        return self.pin_area_mm2() / 1e6
+    @property
+    def area_m2(self) -> float:
+        return self.area_mm2 / 1e6
     
-    def moment_of_inertia_mm4(self):
-        """Area moment of inertia for hollow circular section."""
-        return math.pi * (self.od_mm**4 - self.id_mm**4) / 64
+    @property
+    def I_mm4(self) -> float:
+        """Area moment of inertia."""
+        return math.pi * (self.outer_diameter_mm**4 - self.inner_diameter_mm**4) / 64
     
-    def section_modulus_mm3(self):
-        """Section modulus for bending (Z = I / (d/2))."""
-        return self.moment_of_inertia_mm4() / (self.od_mm / 2)
+    @property
+    def I_m4(self) -> float:
+        return self.I_mm4 / 1e12
     
-    def pin_mass_kg(self, density_kg_m3=7850):
-        """Mass of piston pin."""
-        volume_m3 = math.pi * ((self.od_m/2)**2 - (self.id_m/2)**2) * self.length_m
-        return volume_m3 * density_kg_m3
+    @property
+    def Z_mm3(self) -> float:
+        """Section modulus."""
+        return self.I_mm4 / (self.outer_diameter_mm / 2)
     
-    def pin_hollowness_ratio(self):
+    @property
+    def hollowness_ratio(self) -> float:
         """Ratio of inner to outer diameter (0 = solid, 0.6 = typical)."""
-        return self.id_mm / self.od_mm
+        return self.inner_diameter_mm / self.outer_diameter_mm
     
-    def weight_savings_percent(self):
+    @property
+    def weight_savings_percent(self) -> float:
         """Weight savings compared to solid pin."""
-        ratio = self.pin_hollowness_ratio()
+        ratio = self.hollowness_ratio
         return (1 - (1 - ratio**2)) * 100
 
 
+# ============================================================================
+# SECTION 3: PISTON PIN FORCES
+# ============================================================================
+
+@dataclass
 class PistonPinForces:
-    """Chapter 32.12: Forces acting on piston pin."""
+    """Forces acting on piston pin."""
     
-    def __init__(self, bore_mm, max_gas_pressure_mpa, reciprocating_mass_kg,
-                 max_rpm, stroke_mm, rod_length_mm):
-        """
-        Parameters:
-        -----------
-        bore_mm : float
-            Cylinder bore diameter (mm)
-        max_gas_pressure_mpa : float
-            Maximum combustion pressure (MPa)
-        reciprocating_mass_kg : float
-            Mass of piston assembly (piston + rings + pin) (kg)
-        max_rpm : float
-            Maximum engine speed (RPM)
-        stroke_mm : float
-            Piston stroke (mm)
-        rod_length_mm : float
-            Connecting rod length (mm)
-        """
-        self.bore_mm = bore_mm
-        self.pressure_mpa = max_gas_pressure_mpa
-        self.m_rec = reciprocating_mass_kg
-        self.max_rpm = max_rpm
-        self.stroke_mm = stroke_mm
-        self.rod_length_mm = rod_length_mm
-        
-        # Derived values
-        self.crank_radius_m = stroke_mm / 2000
-        self.omega = 2 * math.pi * max_rpm / 60
-        self.piston_area_m2 = math.pi * (bore_mm/1000)**2 / 4
-        
-        # Gas force
-        self.gas_force_n = self.pressure_mpa * 1e6 * self.piston_area_m2
-        self.gas_force_kn = self.gas_force_n / 1000
+    bore_mm: float
+    max_gas_pressure_mpa: float
+    reciprocating_mass_kg: float
+    max_rpm: float
+    stroke_mm: float
+    rod_length_mm: float
     
-    def gas_force_n(self):
-        """Maximum gas force on piston (compression)."""
-        return self.gas_force_n
+    def __post_init__(self):
+        self.crank_radius_m = self.stroke_mm / 2000
+        self.omega = 2 * math.pi * self.max_rpm / 60
+        self.piston_area_m2 = math.pi * (self.bore_mm/1000)**2 / 4
+        self.gas_force_n = self.max_gas_pressure_mpa * 1e6 * self.piston_area_m2
+        self.reciprocating_mass = self.reciprocating_mass_kg
     
-    def inertia_force_tdc_n(self):
-        """
-        Inertia force at TDC (tension).
-        
-        F_i = m_rec × ω² × r × (1 + r/l)
-        """
-        r_l_ratio = self.crank_radius_m / (self.rod_length_mm/1000)
-        inertia = self.m_rec * self.omega**2 * self.crank_radius_m * (1 + r_l_ratio)
-        return inertia
+    @property
+    def gas_force_kn(self) -> float:
+        return self.gas_force_n / 1000
     
-    def inertia_force_bdc_n(self):
-        """
-        Inertia force at BDC (compression).
-        
-        F_i = -m_rec × ω² × r × (1 - r/l)
-        """
-        r_l_ratio = self.crank_radius_m / (self.rod_length_mm/1000)
-        inertia = -self.m_rec * self.omega**2 * self.crank_radius_m * (1 - r_l_ratio)
-        return inertia
+    @property
+    def inertia_force_tdc_n(self) -> float:
+        """Inertia force at TDC (tension)."""
+        return self.reciprocating_mass * self.omega**2 * self.crank_radius_m * 1.2
     
-    def max_compressive_force_n(self):
-        """Maximum compressive force on pin (gas + inertia at TDC)."""
-        return self.gas_force_n - self.inertia_force_tdc_n()
+    @property
+    def max_compressive_force_n(self) -> float:
+        """Maximum compressive force on pin."""
+        return self.gas_force_n - self.inertia_force_tdc_n
     
-    def max_tensile_force_n(self):
-        """Maximum tensile force on pin (inertia at TDC on exhaust stroke)."""
-        return abs(self.inertia_force_tdc_n())
+    @property
+    def max_tensile_force_n(self) -> float:
+        """Maximum tensile force on pin."""
+        return abs(self.inertia_force_tdc_n)
     
-    def load_distribution_small_end_n(self):
-        """Load on connecting rod small end."""
-        return self.max_compressive_force_n() * 0.5
-    
-    def load_distribution_piston_boss_n(self):
+    @property
+    def load_per_boss_n(self) -> float:
         """Load on each piston boss."""
-        return self.max_compressive_force_n() / 2
+        return self.max_compressive_force_n / 2
 
 
-class PistonPinStresses:
-    """Chapter 32.12: Stress analysis for piston pin."""
+# ============================================================================
+# SECTION 4: PISTON PIN STRESS ANALYSIS
+# ============================================================================
+
+@dataclass
+class PistonPinStressAnalysis:
+    """Complete stress analysis for piston pin."""
     
-    def __init__(self, geometry, forces, material):
-        """
-        Parameters:
-        -----------
-        geometry : PistonPinGeometry
-            Pin geometric parameters
-        forces : PistonPinForces
-            Force calculations
-        material : dict
-            Material properties
-        """
-        self.geometry = geometry
-        self.forces = forces
-        self.material = material
-        
-        # Critical loads
-        self.P_comp_n = forces.max_compressive_force_n()
-        self.P_tensile_n = forces.max_tensile_force_n()
+    geometry: PistonPinGeometry
+    forces: PistonPinForces
+    material: PistonPinMaterial
     
-    def bearing_pressure_piston_boss_mpa(self):
-        """
-        Chapter 32.12: Bearing pressure between pin and piston boss.
-        
-        p = F / (d × l_boss)
-        """
-        load_n = self.forces.load_distribution_piston_boss_n()
-        area_mm2 = self.geometry.od_mm * self.geometry.piston_boss_length_mm
-        pressure_mpa = load_n / area_mm2
-        return pressure_mpa
+    @property
+    def bearing_pressure_boss_mpa(self) -> float:
+        """Bearing pressure between pin and piston boss."""
+        load_n = self.forces.load_per_boss_n
+        area_mm2 = self.geometry.outer_diameter_mm * self.geometry.piston_boss_length_mm
+        return load_n / area_mm2 if area_mm2 > 0 else 0
     
-    def bearing_pressure_small_end_mpa(self):
-        """
-        Chapter 32.12: Bearing pressure between pin and connecting rod small end.
-        
-        p = F / (d × l_rod)
-        """
-        load_n = self.forces.max_compressive_force_n()
-        area_mm2 = self.geometry.od_mm * self.geometry.rod_small_end_length_mm
-        pressure_mpa = load_n / area_mm2
-        return pressure_mpa
+    @property
+    def bearing_pressure_rod_mpa(self) -> float:
+        """Bearing pressure between pin and connecting rod small end."""
+        load_n = self.forces.max_compressive_force_n
+        area_mm2 = self.geometry.outer_diameter_mm * self.geometry.rod_small_end_length_mm
+        return load_n / area_mm2 if area_mm2 > 0 else 0
     
-    def bending_stress_mpa(self, load_distribution="uniform"):
-        """
-        Chapter 32.12: Bending stress in piston pin.
-        
-        Pin is modeled as a simply supported beam with:
-        - Supports at piston bosses
-        - Load distributed across small end bearing
-        """
-        # Effective span (distance between piston bosses)
-        span_mm = (self.geometry.length_mm - 
-                   2 * self.geometry.unsupported_end_length_mm -
-                   self.geometry.rod_small_end_length_mm)
-        
-        # Effective load (use maximum compressive force)
-        load_n = self.forces.max_compressive_force_n()
-        
-        if load_distribution == "concentrated":
-            # Concentrated load at center (simplified, conservative)
-            bending_moment_nmm = load_n * span_mm / 4
-        else:
-            # Distributed load (more accurate)
-            load_per_mm = load_n / self.geometry.rod_small_end_length_mm
-            bending_moment_nmm = (load_per_mm * self.geometry.rod_small_end_length_mm * 
-                                  (2 * span_mm - self.geometry.rod_small_end_length_mm) / 8)
-        
-        section_modulus = self.geometry.section_modulus_mm3()
-        stress_mpa = bending_moment_nmm / section_modulus / 1e3
-        
-        return stress_mpa
+    @property
+    def allowable_bearing_pressure_mpa(self) -> float:
+        """Allowable bearing pressure (case hardened steel)."""
+        return 50.0
     
-    def shear_stress_mpa(self):
+    @property
+    def bending_stress_mpa(self) -> float:
         """
-        Chapter 32.12: Shear stress in piston pin.
-        
-        τ = (4/3) × (F / A) for circular section (max shear)
+        Bending stress in piston pin (simply supported beam model).
         """
-        load_n = self.forces.max_compressive_force_n() / 2  # Each shear plane
-        area_mm2 = self.geometry.pin_area_mm2()
+        # Effective span between piston bosses
+        span_mm = (
+            self.geometry.pin_length_mm 
+            - 2 * self.geometry.unsupported_end_length_mm
+            - self.geometry.rod_small_end_length_mm
+        )
         
-        # Maximum shear stress for circular section = 4/3 × average
-        shear_stress_mpa = (4/3) * (load_n / area_mm2)
+        load_n = self.forces.max_compressive_force_n
         
-        return shear_stress_mpa
+        # Concentrated load at center (simplified, conservative)
+        bending_moment_nmm = load_n * span_mm / 4
+        section_modulus = self.geometry.Z_mm3
+        
+        return bending_moment_nmm / section_modulus if section_modulus > 0 else 0
     
-    def ovalization_deflection_mm(self):
-        """
-        Ovalization (flattening) of hollow pin under load.
-        
-        δ = (F × d_m³) / (E × I × (1 - (d_i/d_o)²))
-        """
-        load_n = self.forces.max_compressive_force_n()
-        d_o_m = self.geometry.od_m / 1000
-        E_pa = self.material["youngs_modulus_gpa"] * 1e9
-        I_m4 = self.geometry.moment_of_inertia_mm4() / 1e12
-        ratio = self.geometry.pin_hollowness_ratio()
-        
-        # Empirical ovalization formula
-        deflection_m = (load_n * d_o_m**3) / (E_pa * I_m4 * (1 - ratio**2)) * 0.01
-        deflection_mm = deflection_m * 1000
-        
-        return deflection_mm
+    @property
+    def shear_stress_mpa(self) -> float:
+        """Shear stress in piston pin."""
+        load_n = self.forces.max_compressive_force_n / 2  # Each shear plane
+        area_mm2 = self.geometry.area_mm2
+        return (4/3) * (load_n / area_mm2) if area_mm2 > 0 else 0
     
-    def pin_bending_deflection_mm(self):
-        """
-        Bending deflection of pin as beam.
-        
-        δ = (F × L³) / (48 × E × I)
-        """
-        load_n = self.forces.max_compressive_force_n()
-        span_m = (self.geometry.length_mm / 1000)
-        E_pa = self.material["youngs_modulus_gpa"] * 1e9
-        I_m4 = self.geometry.moment_of_inertia_mm4() / 1e12
-        
+    @property
+    def von_mises_stress_mpa(self) -> float:
+        """Von Mises equivalent stress."""
+        sigma_b = self.bending_stress_mpa
+        tau = self.shear_stress_mpa
+        return math.sqrt(sigma_b**2 + 3 * tau**2)
+    
+    @property
+    def bending_deflection_mm(self) -> float:
+        """Bending deflection of pin as beam."""
+        load_n = self.forces.max_compressive_force_n
+        span_m = self.geometry.pin_length_mm / 1000
+        E_pa = self.material.youngs_modulus_gpa * 1e9
+        I_m4 = self.geometry.I_m4
         deflection_m = (load_n * span_m**3) / (48 * E_pa * I_m4)
-        deflection_mm = deflection_m * 1000
-        
-        return deflection_mm
+        return deflection_m * 1000
     
-    def von_mises_stress_mpa(self):
-        """
-        Combined stress (bending + shear) using Von Mises criterion.
-        
-        σ_vm = √(σ_b² + 3τ²)
-        """
-        sigma_b = self.bending_stress_mpa()
-        tau = self.shear_stress_mpa()
-        
-        sigma_vm = math.sqrt(sigma_b**2 + 3 * tau**2)
-        return sigma_vm
+    @property
+    def ovalization_mm(self) -> float:
+        """Ovalization (flattening) of hollow pin under load."""
+        load_n = self.forces.max_compressive_force_n
+        d_o_m = self.geometry.outer_diameter_mm / 1000
+        E_pa = self.material.youngs_modulus_gpa * 1e9
+        I_m4 = self.geometry.I_m4
+        ratio = self.geometry.hollowness_ratio
+        deflection_m = (load_n * d_o_m**3) / (E_pa * I_m4 * (1 - ratio**2)) * 0.01
+        return deflection_m * 1000
     
-    def factor_of_safety(self):
-        """Factor of safety for piston pin."""
-        sigma_vm = self.von_mises_stress_mpa()
-        yield_stress = self.material["yield_strength_mpa"]
-        
-        # Apply stress concentration factor for oil holes
-        k_t = 1.3  # Typical for oil holes in pins
-        sigma_effective = sigma_vm * k_t
-        
-        return yield_stress / sigma_effective if sigma_effective > 0 else 999
+    @property
+    def total_deflection_mm(self) -> float:
+        """Total deflection (bending + ovalization)."""
+        return self.bending_deflection_mm + self.ovalization_mm
     
-    def fatigue_safety_factor(self, alternating_ratio=0.5):
-        """
-        Fatigue safety factor using Goodman criterion.
-        
-        1/FS = σ_a/σ_e + σ_m/σ_ut
-        """
-        sigma_vm = self.von_mises_stress_mpa()
-        sigma_alternating = sigma_vm * alternating_ratio
-        sigma_mean = sigma_vm * (1 - alternating_ratio)
-        
-        endurance_limit = self.material["endurance_limit_mpa"]
-        ultimate = self.material["ultimate_tensile_mpa"]
-        
-        # Apply surface and size factors
-        surface_factor = 0.85
-        size_factor = 0.90
-        corrected_endurance = endurance_limit * surface_factor * size_factor
-        
-        fs = 1 / (sigma_alternating/corrected_endurance + sigma_mean/ultimate)
-        return fs
+    @property
+    def factor_of_safety(self) -> float:
+        """Factor of safety against yielding."""
+        vm = self.von_mises_stress_mpa
+        if vm <= 0:
+            return 999
+        return self.material.yield_strength_mpa / vm
 
 
-class PistonPinDesign:
-    """Complete piston pin design with optimization."""
+# ============================================================================
+# SECTION 5: FATIGUE ANALYSIS (Goodman)
+# ============================================================================
+
+@dataclass
+class PistonPinFatigue:
+    """Fatigue analysis for piston pin."""
     
-    PIN_TYPES = {
-        "full_floating": {
-            "description": "Pin rotates freely in both piston and rod",
-            "retention": "Snap rings or retainers in piston grooves",
-            "lubrication": "Oil splash or pressure fed",
-            "typical_clearance_mm": 0.010,
-            "advantages": "Even wear, self-aligning",
-            "disadvantages": "Requires retainers, more complex",
-        },
-        "semi_floating": {
-            "description": "Pin fixed in rod, rotates in piston bosses",
-            "retention": "Interference fit in connecting rod",
-            "lubrication": "Oil splash",
-            "typical_clearance_mm": 0.008,
-            "advantages": "Simpler, no retainers needed",
-            "disadvantages": "Press fit required, less even wear",
-        },
-    }
+    material: PistonPinMaterial
+    bending_stress_mpa: float
+    shear_stress_mpa: float
     
-    def __init__(self, bore_mm, stroke_mm, max_gas_pressure_mpa,
-                 max_rpm, reciprocating_mass_kg, rod_length_mm,
-                 material_name="Case Hardened Steel (8620)",
-                 pin_type="full_floating",
-                 target_fs_bending=2.5, target_fs_bearing=2.0):
+    @property
+    def equivalent_stress_mpa(self) -> float:
+        return math.sqrt(self.bending_stress_mpa**2 + 3 * self.shear_stress_mpa**2)
+    
+    def goodman_fos(self, mean_stress_mpa: float = 0) -> float:
+        """Goodman fatigue criterion."""
+        sigma_a = self.equivalent_stress_mpa
+        sigma_m = mean_stress_mpa
+        sigma_e = self.material.endurance_limit_mpa
+        sigma_u = self.material.ultimate_tensile_mpa
+        
+        if sigma_e <= 0:
+            return 999
+        return 1 / (sigma_a/sigma_e + sigma_m/sigma_u)
+    
+    @property
+    def infinite_life(self) -> bool:
+        return self.goodman_fos() >= 1.0
+
+
+# ============================================================================
+# SECTION 6: COMPLETE PISTON PIN RESULT
+# ============================================================================
+
+@dataclass
+class PistonPinResult:
+    """Complete piston pin design results."""
+    
+    # Geometry
+    outer_diameter_mm: float
+    inner_diameter_mm: float
+    pin_length_mm: float
+    hollowness_ratio: float
+    weight_savings_percent: float
+    piston_boss_length_mm: float
+    rod_small_end_length_mm: float
+    
+    # Forces
+    max_gas_force_kN: float
+    max_compressive_force_kN: float
+    max_tensile_force_kN: float
+    
+    # Bearing pressures
+    boss_bearing_pressure_mpa: float
+    rod_bearing_pressure_mpa: float
+    allowable_bearing_pressure_mpa: float
+    
+    # Stresses
+    bending_stress_mpa: float
+    shear_stress_mpa: float
+    von_mises_stress_mpa: float
+    factor_of_safety: float
+    
+    # Deflections
+    bending_deflection_mm: float
+    ovalization_mm: float
+    total_deflection_mm: float
+    
+    # Fatigue
+    goodman_fos: float
+    infinite_life: bool
+    
+    # Material
+    material_name: str
+    material_description: str
+    surface_hardness_hb: int
+    case_depth_mm: float
+    
+    # Mass
+    pin_mass_g: float
+    
+    @property
+    def is_safe(self) -> bool:
+        return (
+            self.factor_of_safety >= 2.5 and
+            self.boss_bearing_pressure_mpa <= self.allowable_bearing_pressure_mpa and
+            self.goodman_fos >= 1.0
+        )
+    
+    def print_report(self):
+        print("=" * 75)
+        print("PISTON PIN (WRIST PIN) DESIGN REPORT")
+        print("Sources: Khurmi (Chap 32.11-32.12), Heywood, Shigley")
+        print("=" * 75)
+        
+        print("\n📏 PIN DIMENSIONS:")
+        print(f"   Outer diameter: {self.outer_diameter_mm:.2f} mm")
+        print(f"   Inner diameter: {self.inner_diameter_mm:.2f} mm")
+        print(f"   Total length: {self.pin_length_mm:.2f} mm")
+        print(f"   Piston boss length: {self.piston_boss_length_mm:.2f} mm")
+        print(f"   Rod small end length: {self.rod_small_end_length_mm:.2f} mm")
+        print(f"   Hollowness ratio (di/do): {self.hollowness_ratio:.2f}")
+        print(f"   Weight savings: {self.weight_savings_percent:.0f}%")
+        
+        print("\n⚡ FORCES:")
+        print(f"   Max gas force: {self.max_gas_force_kN:.1f} kN")
+        print(f"   Max compressive force: {self.max_compressive_force_kN:.1f} kN")
+        print(f"   Max tensile force: {self.max_tensile_force_kN:.1f} kN")
+        
+        print("\n🔧 BEARING PRESSURES:")
+        boss_status = "✅ OK" if self.boss_bearing_pressure_mpa <= self.allowable_bearing_pressure_mpa else "⚠️ HIGH"
+        print(f"   Piston boss: {self.boss_bearing_pressure_mpa:.2f} MPa (allowable: {self.allowable_bearing_pressure_mpa:.0f}) {boss_status}")
+        rod_status = "✅ OK" if self.rod_bearing_pressure_mpa <= self.allowable_bearing_pressure_mpa else "⚠️ HIGH"
+        print(f"   Rod small end: {self.rod_bearing_pressure_mpa:.2f} MPa (allowable: {self.allowable_bearing_pressure_mpa:.0f}) {rod_status}")
+        
+        print("\n📊 STRESS ANALYSIS:")
+        print(f"   Bending stress: {self.bending_stress_mpa:.1f} MPa")
+        print(f"   Shear stress: {self.shear_stress_mpa:.1f} MPa")
+        print(f"   Von Mises stress: {self.von_mises_stress_mpa:.1f} MPa")
+        print(f"   Factor of safety: {self.factor_of_safety:.2f}")
+        
+        print("\n📐 DEFLECTION:")
+        print(f"   Bending deflection: {self.bending_deflection_mm:.4f} mm")
+        print(f"   Ovalization: {self.ovalization_mm:.4f} mm")
+        print(f"   Total deflection: {self.total_deflection_mm:.4f} mm")
+        
+        print("\n🔄 FATIGUE ANALYSIS:")
+        print(f"   Goodman FOS: {self.goodman_fos:.2f}")
+        print(f"   Infinite life: {'✅ Yes' if self.infinite_life else '⚠️ No'}")
+        
+        print("\n🏗️ MATERIAL:")
+        print(f"   Material: {self.material_name}")
+        print(f"   {self.material_description}")
+        print(f"   Surface hardness: {self.surface_hardness_hb} HB")
+        print(f"   Case depth: {self.case_depth_mm:.1f} mm")
+        
+        print("\n⚖️ MASS:")
+        print(f"   Pin mass: {self.pin_mass_g:.1f} g")
+        
+        print("\n" + "=" * 75)
+        
+        if not self.is_safe:
+            print("\n⚠️ DESIGN ISSUES:")
+            if self.factor_of_safety < 2.5:
+                print("   - Factor of safety below 2.5")
+            if self.boss_bearing_pressure_mpa > self.allowable_bearing_pressure_mpa:
+                print("   - Boss bearing pressure exceeds allowable")
+            if self.goodman_fos < 1.0:
+                print("   - Fatigue life not infinite")
+        else:
+            print("\n✅ DESIGN ACCEPTABLE - All criteria satisfied")
+        
+        print("=" * 75)
+
+
+# ============================================================================
+# SECTION 7: COMPLETE PISTON PIN DESIGNER
+# ============================================================================
+
+class PistonPinDesigner:
+    """Complete piston pin design from scratch."""
+    
+    def __init__(
+        self,
+        bore_mm: float,
+        stroke_mm: float,
+        max_gas_pressure_mpa: float,
+        max_rpm: float,
+        reciprocating_mass_kg: float,
+        rod_length_mm: float,
+        material_name: str = "Case Hardened Steel (8620)",
+        pin_type: str = "full_floating",
+    ):
         """
-        Complete piston pin design calculator.
+        Initialize piston pin designer.
         
         Parameters:
         -----------
@@ -472,287 +517,109 @@ class PistonPinDesign:
         reciprocating_mass_kg : float
             Mass of piston assembly (kg)
         rod_length_mm : float
-            Connecting rod center-to-center length (mm)
+            Connecting rod length (mm)
         material_name : str
             Pin material
         pin_type : str
             'full_floating' or 'semi_floating'
-        target_fs_bending : float
-            Target factor of safety for bending
-        target_fs_bearing : float
-            Target factor of safety for bearing pressure
         """
         self.bore_mm = bore_mm
         self.stroke_mm = stroke_mm
-        self.pressure_mpa = max_gas_pressure_mpa
         self.max_rpm = max_rpm
-        self.m_rec = reciprocating_mass_kg
         self.rod_length_mm = rod_length_mm
-        self.pin_type = pin_type
-        self.target_fs_bending = target_fs_bending
-        self.target_fs_bearing = target_fs_bearing
         
         # Material
-        self.material_data = PistonPinMaterial.get_material(material_name)
-        self.material_data["name"] = material_name
-        self.material = self.material_data
-        
-        # Pin type info
-        self.pin_type_info = self.PIN_TYPES.get(pin_type, self.PIN_TYPES["full_floating"])
-        
-        # Initialize geometry (initial estimates)
-        self.geometry = PistonPinGeometry(bore_mm, pin_type=pin_type)
+        self.material = get_piston_pin_material(material_name)
         
         # Forces
         self.forces = PistonPinForces(
-            bore_mm, max_gas_pressure_mpa, reciprocating_mass_kg,
-            max_rpm, stroke_mm, rod_length_mm
+            bore_mm=bore_mm,
+            max_gas_pressure_mpa=max_gas_pressure_mpa,
+            reciprocating_mass_kg=reciprocating_mass_kg,
+            max_rpm=max_rpm,
+            stroke_mm=stroke_mm,
+            rod_length_mm=rod_length_mm,
         )
         
-        # Stresses
-        self.stresses = PistonPinStresses(self.geometry, self.forces, self.material)
+        # Geometry
+        self.geometry = PistonPinGeometry(
+            bore_mm=bore_mm,
+            pin_type=pin_type,
+        )
         
-        # Optimize pin dimensions
-        self.optimize_dimensions()
+        # Stress analysis
+        self.stress = PistonPinStressAnalysis(
+            geometry=self.geometry,
+            forces=self.forces,
+            material=self.material,
+        )
+        
+        # Fatigue
+        self.fatigue = PistonPinFatigue(
+            material=self.material,
+            bending_stress_mpa=self.stress.bending_stress_mpa,
+            shear_stress_mpa=self.stress.shear_stress_mpa,
+        )
+        
+        self.results = self._calculate_results()
     
-    def optimize_dimensions(self):
-        """
-        Iteratively optimize pin dimensions to meet safety factors.
-        """
-        max_iterations = 10
-        tolerance = 0.05
+    def _calculate_results(self) -> PistonPinResult:
+        """Calculate all design results."""
         
-        for _ in range(max_iterations):
-            fs_bending = self.stresses.factor_of_safety()
-            bearing_pressure = self.stresses.bearing_pressure_piston_boss_mpa()
-            
-            # Check if current design meets targets
-            bending_ok = fs_bending >= self.target_fs_bending
-            bearing_ok = bearing_pressure <= self.pin_type_info["typical_clearance_mm"] * 100
-            
-            if bending_ok and bearing_ok:
-                break
-            
-            # Adjust pin outer diameter
-            if fs_bending < self.target_fs_bending:
-                # Increase pin diameter
-                self.geometry.od_mm *= 1.03
-            else:
-                # Try smaller pin (reduce mass)
-                self.geometry.od_mm *= 0.98
-            
-            if bearing_pressure > self.pin_type_info["typical_clearance_mm"] * 100:
-                # Increase boss or rod bearing length
-                self.geometry.piston_boss_length_mm *= 1.02
-            
-            # Update geometry
-            self.geometry.id_mm = 0.6 * self.geometry.od_mm
-            self.geometry.od_m = self.geometry.od_mm / 1000
-            self.geometry.id_m = self.geometry.id_mm / 1000
-            
-            # Recalculate stresses
-            self.stresses = PistonPinStresses(self.geometry, self.forces, self.material)
+        # Mass
+        volume_m3 = self.geometry.area_m2 * (self.geometry.pin_length_mm / 1000)
+        mass_kg = volume_m3 * self.material.density_kg_m3
         
-        # Final dimensions
-        self.final_od_mm = self.geometry.od_mm
-        self.final_id_mm = self.geometry.id_mm
-        self.final_length_mm = self.geometry.length_mm
+        return PistonPinResult(
+            outer_diameter_mm=self.geometry.outer_diameter_mm,
+            inner_diameter_mm=self.geometry.inner_diameter_mm,
+            pin_length_mm=self.geometry.pin_length_mm,
+            hollowness_ratio=self.geometry.hollowness_ratio,
+            weight_savings_percent=self.geometry.weight_savings_percent,
+            piston_boss_length_mm=self.geometry.piston_boss_length_mm,
+            rod_small_end_length_mm=self.geometry.rod_small_end_length_mm,
+            max_gas_force_kN=self.forces.gas_force_kn,
+            max_compressive_force_kN=self.forces.max_compressive_force_n / 1000,
+            max_tensile_force_kN=self.forces.max_tensile_force_n / 1000,
+            boss_bearing_pressure_mpa=self.stress.bearing_pressure_boss_mpa,
+            rod_bearing_pressure_mpa=self.stress.bearing_pressure_rod_mpa,
+            allowable_bearing_pressure_mpa=self.stress.allowable_bearing_pressure_mpa,
+            bending_stress_mpa=self.stress.bending_stress_mpa,
+            shear_stress_mpa=self.stress.shear_stress_mpa,
+            von_mises_stress_mpa=self.stress.von_mises_stress_mpa,
+            factor_of_safety=self.stress.factor_of_safety,
+            bending_deflection_mm=self.stress.bending_deflection_mm,
+            ovalization_mm=self.stress.ovalization_mm,
+            total_deflection_mm=self.stress.total_deflection_mm,
+            goodman_fos=self.fatigue.goodman_fos(),
+            infinite_life=self.fatigue.infinite_life,
+            material_name=self.material.name,
+            material_description=self.material.description,
+            surface_hardness_hb=self.material.hardness_surface_hb,
+            case_depth_mm=self.material.case_depth_mm,
+            pin_mass_g=mass_kg * 1000,
+        )
     
-    def design_summary(self):
-        """Generate complete piston pin design summary."""
-        
-        summary = {
-            # Basic dimensions
-            "bore_mm": self.bore_mm,
-            "pin_outer_diameter_mm": round(self.geometry.od_mm, 2),
-            "pin_inner_diameter_mm": round(self.geometry.id_mm, 2),
-            "pin_length_mm": round(self.geometry.length_mm, 2),
-            "pin_hollowness_ratio": round(self.geometry.pin_hollowness_ratio(), 2),
-            "weight_savings_percent": round(self.geometry.weight_savings_percent(), 1),
-            
-            # Bearing lengths
-            "piston_boss_length_mm": round(self.geometry.piston_boss_length_mm, 2),
-            "rod_small_end_length_mm": round(self.geometry.rod_small_end_length_mm, 2),
-            
-            # Forces
-            "max_gas_force_kN": round(self.forces.gas_force_kn, 1),
-            "max_compressive_force_kN": round(self.forces.max_compressive_force_n() / 1000, 1),
-            "max_tensile_force_kN": round(self.forces.max_tensile_force_n() / 1000, 1),
-            
-            # Stresses
-            "bending_stress_mpa": round(self.stresses.bending_stress_mpa(), 1),
-            "shear_stress_mpa": round(self.stresses.shear_stress_mpa(), 1),
-            "von_mises_stress_mpa": round(self.stresses.von_mises_stress_mpa(), 1),
-            "yield_strength_mpa": self.material["yield_strength_mpa"],
-            "fatigue_limit_mpa": self.material["fatigue_limit_mpa"],
-            
-            # Safety factors
-            "factor_of_safety_bending": round(self.stresses.factor_of_safety(), 2),
-            "fatigue_safety_factor": round(self.stresses.fatigue_safety_factor(), 2),
-            "target_fs_bending": self.target_fs_bending,
-            
-            # Bearing pressures
-            "bearing_pressure_boss_mpa": round(self.stresses.bearing_pressure_piston_boss_mpa(), 2),
-            "bearing_pressure_rod_mpa": round(self.stresses.bearing_pressure_small_end_mpa(), 2),
-            "allowable_bearing_pressure_mpa": 50,  # Typical for case hardened steel
-            
-            # Deflections
-            "bending_deflection_mm": round(self.stresses.pin_bending_deflection_mm(), 4),
-            "ovalization_deflection_mm": round(self.stresses.ovalization_deflection_mm(), 4),
-            
-            # Pin type
-            "pin_type": self.pin_type,
-            "pin_type_description": self.pin_type_info["description"],
-            "pin_retention": self.pin_type_info["retention"],
-            "typical_clearance_mm": self.pin_type_info["typical_clearance_mm"],
-            
-            # Material
-            "material": self.material["name"],
-            "material_description": self.material["description"],
-            "surface_hardness_hb": self.material["hardness_surface_hb"],
-            "case_depth_mm": self.material.get("case_depth_mm", 0),
-            
-            # Mass
-            "pin_mass_kg": round(self.geometry.pin_mass_kg(self.material["density_kg_m3"]), 3),
-            "pin_mass_grams": round(self.geometry.pin_mass_kg(self.material["density_kg_m3"]) * 1000, 1),
-        }
-        
-        return summary
+    def get_results(self) -> PistonPinResult:
+        return self.results
     
-    def print_design_report(self):
-        """Print formatted design report."""
-        s = self.design_summary()
-        
-        print("=" * 70)
-        print("PISTON PIN (WRIST PIN) DESIGN REPORT")
-        print("Machine Design Textbook - Chapter 32.11-32.12")
-        print("=" * 70)
-        
-        print(f"\n📐 ENGINE SPECIFICATIONS:")
-        print(f"   Bore: {s['bore_mm']:.1f} mm")
-        print(f"   Stroke: {self.stroke_mm:.1f} mm")
-        print(f"   Max RPM: {self.max_rpm:.0f}")
-        print(f"   Max gas pressure: {self.pressure_mpa:.1f} MPa")
-        print(f"   Reciprocating mass: {self.m_rec:.3f} kg")
-        
-        print(f"\n📏 PIN DIMENSIONS:")
-        print(f"   Outer diameter: {s['pin_outer_diameter_mm']:.2f} mm")
-        print(f"   Inner diameter: {s['pin_inner_diameter_mm']:.2f} mm")
-        print(f"   Total length: {s['pin_length_mm']:.2f} mm")
-        print(f"   Piston boss length: {s['piston_boss_length_mm']:.2f} mm")
-        print(f"   Rod small end length: {s['rod_small_end_length_mm']:.2f} mm")
-        print(f"   Hollowness ratio (d_i/d_o): {s['pin_hollowness_ratio']:.2f}")
-        print(f"   Weight savings: {s['weight_savings_percent']:.0f}%")
-        
-        print(f"\n⚡ FORCES:")
-        print(f"   Max gas force: {s['max_gas_force_kN']:.1f} kN")
-        print(f"   Max compressive force: {s['max_compressive_force_kN']:.1f} kN")
-        print(f"   Max tensile force: {s['max_tensile_force_kN']:.1f} kN")
-        
-        print(f"\n📊 STRESS ANALYSIS:")
-        print(f"   Bending stress: {s['bending_stress_mpa']:.1f} MPa")
-        print(f"   Shear stress: {s['shear_stress_mpa']:.1f} MPa")
-        print(f"   Von Mises stress: {s['von_mises_stress_mpa']:.1f} MPa")
-        print(f"   Yield strength: {s['yield_strength_mpa']} MPa")
-        print(f"   ✅ Bending F.S.: {s['factor_of_safety_bending']:.2f} (target: {s['target_fs_bending']:.1f})")
-        print(f"   ✅ Fatigue F.S.: {s['fatigue_safety_factor']:.2f}")
-        
-        print(f"\n🔧 BEARING ANALYSIS:")
-        print(f"   Piston boss pressure: {s['bearing_pressure_boss_mpa']:.2f} MPa")
-        print(f"   Rod small end pressure: {s['bearing_pressure_rod_mpa']:.2f} MPa")
-        print(f"   Allowable pressure: {s['allowable_bearing_pressure_mpa']:.0f} MPa")
-        bearing_status = "✅ OK" if s['bearing_pressure_boss_mpa'] < s['allowable_bearing_pressure_mpa'] else "⚠️ EXCESSIVE"
-        print(f"   Status: {bearing_status}")
-        
-        print(f"\n📐 DEFLECTION:")
-        print(f"   Bending deflection: {s['bending_deflection_mm']:.4f} mm")
-        print(f"   Ovalization: {s['ovalization_deflection_mm']:.4f} mm")
-        print(f"   Total deflection: {(s['bending_deflection_mm'] + s['ovalization_deflection_mm']):.4f} mm")
-        
-        print(f"\n🔩 PIN TYPE: {s['pin_type'].upper()}")
-        print(f"   Description: {s['pin_type_description']}")
-        print(f"   Retention: {s['pin_retention']}")
-        print(f"   Typical clearance: {s['typical_clearance_mm']:.3f} mm")
-        
-        print(f"\n🏗️ MATERIAL:")
-        print(f"   Material: {s['material']}")
-        print(f"   {s['material_description']}")
-        print(f"   Surface hardness: {s['surface_hardness_hb']} HB")
-        print(f"   Case depth: {s['case_depth_mm']:.1f} mm")
-        
-        print(f"\n⚖️ MASS:")
-        print(f"   Pin mass: {s['pin_mass_grams']:.1f} g ({s['pin_mass_kg']:.3f} kg)")
-        
-        print("\n" + "=" * 70)
-        
-        # Validation and recommendations
-        issues = []
-        if s['factor_of_safety_bending'] < self.target_fs_bending:
-            issues.append("⚠️ BENDING SAFETY FACTOR BELOW TARGET")
-        if s['bearing_pressure_boss_mpa'] > s['allowable_bearing_pressure_mpa']:
-            issues.append("⚠️ BEARING PRESSURE EXCEEDS ALLOWABLE")
-        if s['fatigue_safety_factor'] < 1.5:
-            issues.append("⚠️ FATIGUE SAFETY FACTOR LOW")
-        if (s['bending_deflection_mm'] + s['ovalization_deflection_mm']) > 0.05:
-            issues.append("⚠️ EXCESSIVE PIN DEFLECTION")
-        
-        if issues:
-            print("\n⚠️ DESIGN ISSUES / RECOMMENDATIONS:")
-            for issue in issues:
-                print(f"   {issue}")
-            print("\n   Suggested actions:")
-            if s['factor_of_safety_bending'] < self.target_fs_bending:
-                print("   → Increase pin outer diameter")
-            if s['bearing_pressure_boss_mpa'] > s['allowable_bearing_pressure_mpa']:
-                print("   → Increase piston boss length or pin diameter")
-            if s['fatigue_safety_factor'] < 1.5:
-                print("   → Use higher strength material or increase diameter")
-        else:
-            print("\n✅ DESIGN ACCEPTABLE - All criteria satisfied")
-        
-        print("=" * 70)
-        
-        # Design tips
-        print("\n💡 DESIGN TIPS:")
-        print("   • Oil holes (2-4 holes) should be placed at neutral stress zones")
-        print("   • Pin should be lighter than 2-3% of piston assembly mass")
-        print("   • Surface hardness > 60 HRC for wear resistance")
-        print("   • Tapered or stepped pins can reduce mass further")
-        print("   • Diamond-like carbon (DLC) coating reduces friction")
+    def print_report(self):
+        self.results.print_report()
 
 
 # ============================================================================
-# Example usage
+# EXAMPLE USAGE
 # ============================================================================
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("PISTON PIN DESIGN CALCULATOR")
-    print("Machine Design Textbook - Chapter 32.11-32.12")
-    print("=" * 70)
-    
-    print("\n📌 Example: 2.0L Automotive Engine")
-    print("   Bore: 85 mm, Stroke: 88 mm, Max Pressure: 8 MPa")
-    print("   Max RPM: 6500, Piston mass: 0.45 kg")
-    print("-" * 70)
-    
-    # Create piston pin design
-    piston_pin = PistonPinDesign(
-        bore_mm=85,
-        stroke_mm=88,
+    # Test with typical 2.0L gasoline engine
+    pin = PistonPinDesigner(
+        bore_mm=85.0,
+        stroke_mm=88.0,
         max_gas_pressure_mpa=8.0,
         max_rpm=6500,
-        reciprocating_mass_kg=0.45,  # Piston + rings + pin
-        rod_length_mm=145,  # 1.65 × stroke
+        reciprocating_mass_kg=0.45,
+        rod_length_mm=145.0,
         material_name="Case Hardened Steel (8620)",
-        pin_type="full_floating",
-        target_fs_bending=2.5,
-        target_fs_bearing=2.0
     )
-    
-    # Print design report
-    piston_pin.print_design_report()
-    
-    print("\n" + "=" * 70)
-    print("Piston pin design ready for engine integration.")
-    print("=" * 70)
+    pin.print_report()

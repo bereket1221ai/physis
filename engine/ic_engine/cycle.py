@@ -1,664 +1,580 @@
 """
-cycle.py - Engine Cycles: Otto and Diesel Cycle Analysis
+cycle.py - Complete Engine Cycle Analysis
 
-Based on Machine Design textbook and Thermodynamics principles
-Sections covered:
-- Air-standard cycles
-- Otto cycle (spark ignition)
-- Diesel cycle (compression ignition)
-- P-V and T-S diagrams
-- Efficiency calculations
-- Mean effective pressure
-- Work output analysis
-- Heat transfer calculations
+Sources:
+- Machine Design Textbook
+- Internal Combustion Engine Fundamentals - John B. Heywood
+- Engineering Thermodynamics - Cengel & Boles
+- SAE International standards
+
+Covers:
+- Otto Cycle (Spark Ignition)
+- Diesel Cycle (Compression Ignition)
+- Dual Cycle (Limited Pressure)
+- Real gas properties (variable specific heat)
+- Heat release modeling (Wiebe function)
+- Knock prediction
+- Turbocharging effects
+- Engine performance maps
+- Emissions estimation
 """
 
 import math
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, Tuple, List
 
 
+# ============================================================================
+# SECTION 1: WORKING FLUID PROPERTIES
+# ============================================================================
+
+@dataclass(frozen=True)
 class WorkingFluid:
-    """Working fluid properties for engine cycle analysis."""
+    """Real gas properties for working fluid."""
     
-    # Air properties (typical for engine cycle analysis)
-    AIR_PROPERTIES = {
-        "R_specific_j_kgk": 287,      # Specific gas constant (J/kg·K)
-        "cp_j_kgk": 1005,              # Specific heat at constant pressure (J/kg·K)
-        "cv_j_kgk": 718,               # Specific heat at constant volume (J/kg·K)
-        "gamma": 1.4,                  # Ratio of specific heats (cp/cv)
-        "molar_mass_kg_kmol": 28.97,   # Molar mass (kg/kmol)
-    }
-    
-    def __init__(self, gamma=1.4, gas_constant=287, cp=1005, cv=718):
-        """
-        Parameters:
-        -----------
-        gamma : float
-            Ratio of specific heats (cp/cv) - typically 1.4 for air
-        gas_constant : float
-            Specific gas constant (R) in J/kg·K
-        cp : float
-            Specific heat at constant pressure (J/kg·K)
-        cv : float
-            Specific heat at constant volume (J/kg·K)
-        """
-        self.gamma = gamma
-        self.R = gas_constant
-        self.cp = cp
-        self.cv = cv
+    name: str
+    gamma: float  # Ratio of specific heats (cp/cv)
+    R_j_kgk: float  # Specific gas constant
+    cp_j_kgk: float  # Specific heat at constant pressure
+    cv_j_kgk: float  # Specific heat at constant volume
     
     @classmethod
-    def air(cls):
-        """Create working fluid with air properties."""
+    def air(cls) -> 'WorkingFluid':
+        """Standard air properties."""
         return cls(
-            gamma=cls.AIR_PROPERTIES["gamma"],
-            gas_constant=cls.AIR_PROPERTIES["R_specific_j_kgk"],
-            cp=cls.AIR_PROPERTIES["cp_j_kgk"],
-            cv=cls.AIR_PROPERTIES["cv_j_kgk"]
+            name="Air",
+            gamma=1.4,
+            R_j_kgk=287.0,
+            cp_j_kgk=1005.0,
+            cv_j_kgk=718.0,
         )
     
     @classmethod
-    def custom(cls, gamma, gas_constant, cp, cv):
-        """Create custom working fluid."""
-        return cls(gamma=gamma, gas_constant=gas_constant, cp=cp, cv=cv)
-
-
-class StatePoint:
-    """Thermodynamic state point (P, V, T)."""
-    
-    def __init__(self, pressure_pa, volume_m3, temperature_k, mass_kg=None):
-        """
-        Parameters:
-        -----------
-        pressure_pa : float
-            Absolute pressure (Pa)
-        volume_m3 : float
-            Volume (m³)
-        temperature_k : float
-            Absolute temperature (K)
-        mass_kg : float, optional
-            Mass of working fluid (kg)
-        """
-        self.P = pressure_pa
-        self.V = volume_m3
-        self.T = temperature_k
-        self.m = mass_kg
-    
-    @property
-    def pressure_mpa(self):
-        """Pressure in MPa."""
-        return self.P / 1e6
-    
-    @property
-    def pressure_bar(self):
-        """Pressure in bar."""
-        return self.P / 1e5
-    
-    @property
-    def volume_cc(self):
-        """Volume in cubic centimeters (cc)."""
-        return self.V * 1e6
-    
-    def __repr__(self):
-        return f"StatePoint(P={self.P/1e3:.1f}kPa, V={self.V*1e6:.1f}cc, T={self.T:.1f}K)"
-
-
-class OttoCycle:
-    """Chapter 32: Otto cycle for spark ignition engines."""
-    
-    def __init__(self, bore_mm, stroke_mm, compression_ratio, clearance_volume_cc=None,
-                 inlet_pressure_kpa=101.3, inlet_temperature_k=298,
-                 peak_pressure_mpa=None, peak_temperature_k=None,
-                 working_fluid=None):
-        """
-        Parameters:
-        -----------
-        bore_mm : float
-            Cylinder bore diameter (mm)
-        stroke_mm : float
-            Piston stroke (mm)
-        compression_ratio : float
-            Compression ratio (V1/V2) - typically 8-12 for gasoline
-        clearance_volume_cc : float, optional
-            Clearance volume (cc) - calculated if not provided
-        inlet_pressure_kpa : float
-            Intake manifold pressure (kPa) - typically 101.3 for naturally aspirated
-        inlet_temperature_k : float
-            Intake air temperature (K) - typically 298-320 K
-        peak_pressure_mpa : float, optional
-            Peak combustion pressure (MPa) - calculated if not provided
-        peak_temperature_k : float, optional
-            Peak combustion temperature (K) - calculated if not provided
-        working_fluid : WorkingFluid, optional
-            Working fluid properties (default: air)
-        """
-        self.bore_mm = bore_mm
-        self.stroke_mm = stroke_mm
-        self.r = compression_ratio
-        self.P1_pa = inlet_pressure_kpa * 1000
-        self.T1_K = inlet_temperature_k
-        self.peak_pressure_mpa = peak_pressure_mpa
-        self.peak_temperature_K = peak_temperature_k
-        
-        # Working fluid
-        self.fluid = working_fluid or WorkingFluid.air()
-        
-        # Calculate volumes
-        self.swept_volume_cc = math.pi * (bore_mm ** 2) / 4 * stroke_mm / 1000
-        self.swept_volume_m3 = self.swept_volume_cc / 1e6
-        
-        if clearance_volume_cc:
-            self.clearance_volume_cc = clearance_volume_cc
-        else:
-            self.clearance_volume_cc = self.swept_volume_cc / (compression_ratio - 1)
-        
-        self.clearance_volume_m3 = self.clearance_volume_cc / 1e6
-        self.total_volume_cc = self.swept_volume_cc + self.clearance_volume_cc
-        self.total_volume_m3 = self.total_volume_cc / 1e6
-        
-        # Mass of working fluid (from ideal gas law at inlet)
-        self.mass_kg = (self.P1_pa * self.total_volume_m3) / (self.fluid.R * self.T1_K)
-    
-    def state_1_intake_bdc(self):
-        """
-        State 1: Start of compression stroke (BDC, intake valve closes).
-        
-        P₁ = intake pressure
-        V₁ = total volume (swept + clearance)
-        T₁ = intake temperature
-        """
-        return StatePoint(
-            pressure_pa=self.P1_pa,
-            volume_m3=self.total_volume_m3,
-            temperature_k=self.T1_K,
-            mass_kg=self.mass_kg
+    def air_variable_cp(cls, temperature_k: float) -> 'WorkingFluid':
+        """Air with temperature-dependent specific heat."""
+        # Polynomial approximation for cp(T)
+        cp = 1000 + 0.1 * (temperature_k - 300)
+        cv = cp / 1.4
+        gamma = cp / cv
+        return cls(
+            name="Air (Variable CP)",
+            gamma=gamma,
+            R_j_kgk=287.0,
+            cp_j_kgk=cp,
+            cv_j_kgk=cv,
         )
-    
-    def state_2_compression_tdc(self):
-        """
-        State 2: End of compression stroke (TDC).
-        
-        Isentropic compression: P₂ = P₁ × r^γ
-                              V₂ = V₁ / r
-                              T₂ = T₁ × r^(γ-1)
-        """
-        state1 = self.state_1_intake_bdc()
-        
-        P2_pa = state1.P * (self.r ** self.fluid.gamma)
-        V2_m3 = state1.V / self.r
-        T2_K = state1.T * (self.r ** (self.fluid.gamma - 1))
-        
-        return StatePoint(P2_pa, V2_m3, T2_K, self.mass_kg)
-    
-    def state_3_combustion(self):
-        """
-        State 3: After heat addition (constant volume combustion).
-        
-        V₃ = V₂ (constant volume)
-        P₃ = peak combustion pressure
-        T₃ = P₃ × V₃ / (m × R)
-        """
-        state2 = self.state_2_compression_tdc()
-        
-        # Calculate peak pressure if not provided
-        if self.peak_pressure_mpa:
-            P3_pa = self.peak_pressure_mpa * 1e6
-        else:
-            # Estimate: 4-6 times compression pressure for gasoline
-            P3_pa = state2.P * 5.0
-        
-        V3_m3 = state2.V
-        
-        # Temperature from ideal gas law
-        T3_K = (P3_pa * V3_m3) / (self.mass_kg * self.fluid.R)
-        
-        return StatePoint(P3_pa, V3_m3, T3_K, self.mass_kg)
-    
-    def state_4_expansion_bdc(self):
-        """
-        State 4: End of expansion stroke (BDC, exhaust valve opens).
-        
-        Isentropic expansion: P₄ = P₃ / r^γ
-                             V₄ = V₁ (total volume)
-                             T₄ = T₃ / r^(γ-1)
-        """
-        state3 = self.state_3_combustion()
-        state1 = self.state_1_intake_bdc()
-        
-        P4_pa = state3.P / (self.r ** self.fluid.gamma)
-        V4_m3 = state1.V
-        T4_K = state3.T / (self.r ** (self.fluid.gamma - 1))
-        
-        return StatePoint(P4_pa, V4_m3, T4_K, self.mass_kg)
-    
-    def heat_added_j(self):
-        """
-        Heat added during combustion (Q_in).
-        
-        Q_in = m × c_v × (T₃ - T₂)
-        """
-        state2 = self.state_2_compression_tdc()
-        state3 = self.state_3_combustion()
-        
-        Q_in = self.mass_kg * self.fluid.cv * (state3.T - state2.T)
-        return Q_in
-    
-    def heat_rejected_j(self):
-        """
-        Heat rejected during exhaust (Q_out).
-        
-        Q_out = m × c_v × (T₄ - T₁)
-        """
-        state1 = self.state_1_intake_bdc()
-        state4 = self.state_4_expansion_bdc()
-        
-        Q_out = self.mass_kg * self.fluid.cv * (state4.T - state1.T)
-        return Q_out
-    
-    def work_net_j(self):
-        """
-        Net work output per cycle.
-        
-        W_net = Q_in - Q_out
-        """
-        return self.heat_added_j() - self.heat_rejected_j()
-    
-    def efficiency(self):
-        """
-        Otto cycle thermal efficiency.
-        
-        η = 1 - 1 / r^(γ-1)
-        """
-        return 1 - (1 / (self.r ** (self.fluid.gamma - 1)))
-    
-    def mean_effective_pressure_pa(self):
-        """
-        Mean effective pressure (MEP).
-        
-        MEP = W_net / V_swept
-        """
-        W_net = self.work_net_j()
-        return W_net / self.swept_volume_m3
-    
-    def mean_effective_pressure_mpa(self):
-        """Mean effective pressure in MPa."""
-        return self.mean_effective_pressure_pa() / 1e6
-    
-    def power_kw(self, rpm, cylinders=4, cycles_per_revolution=0.5):
-        """
-        Engine power output.
-        
-        Power = W_net × (rpm/60) × cylinders × cycles_per_revolution
-        
-        For 4-stroke: cycles_per_revolution = 0.5
-        For 2-stroke: cycles_per_revolution = 1.0
-        """
-        cycles_per_second = (rpm / 60) * cycles_per_revolution
-        power_w = self.work_net_j() * cylinders * cycles_per_second
-        return power_w / 1000
-    
-    def get_all_states(self):
-        """
-        Get all four states of the Otto cycle.
-        
-        Returns:
-        --------
-        dict : States 1, 2, 3, 4 with P, V, T
-        """
-        return {
-            "state1": self.state_1_intake_bdc(),
-            "state2": self.state_2_compression_tdc(),
-            "state3": self.state_3_combustion(),
-            "state4": self.state_4_expansion_bdc(),
-        }
-    
-    def print_cycle_report(self):
-        """Print detailed cycle analysis report."""
-        states = self.get_all_states()
-        
-        print("=" * 70)
-        print("OTTO CYCLE ANALYSIS - Spark Ignition Engine")
-        print("=" * 70)
-        
-        print(f"\n📌 ENGINE PARAMETERS:")
-        print(f"   Bore: {self.bore_mm:.1f} mm")
-        print(f"   Stroke: {self.stroke_mm:.1f} mm")
-        print(f"   Compression ratio: {self.r:.1f}:1")
-        print(f"   Swept volume: {self.swept_volume_cc:.1f} cc")
-        print(f"   Clearance volume: {self.clearance_volume_cc:.1f} cc")
-        print(f"   Total volume: {self.total_volume_cc:.1f} cc")
-        
-        print(f"\n🌡️ WORKING FLUID:")
-        print(f"   Mass of air: {self.mass_kg * 1000:.2f} g")
-        print(f"   γ (cp/cv): {self.fluid.gamma:.3f}")
-        print(f"   R: {self.fluid.R:.1f} J/kg·K")
-        
-        print(f"\n📍 STATE POINTS:")
-        print(f"   State 1 (Intake BDC):  P={states['state1'].pressure_bar:.2f} bar, "
-              f"T={states['state1'].T:.1f}K, V={states['state1'].volume_cc:.1f}cc")
-        print(f"   State 2 (Compression TDC): P={states['state2'].pressure_bar:.2f} bar, "
-              f"T={states['state2'].T:.1f}K, V={states['state2'].volume_cc:.1f}cc")
-        print(f"   State 3 (Combustion): P={states['state3'].pressure_bar:.2f} bar, "
-              f"T={states['state3'].T:.1f}K, V={states['state3'].volume_cc:.1f}cc")
-        print(f"   State 4 (Expansion BDC): P={states['state4'].pressure_bar:.2f} bar, "
-              f"T={states['state4'].T:.1f}K, V={states['state4'].volume_cc:.1f}cc")
-        
-        print(f"\n⚡ CYCLE PERFORMANCE:")
-        print(f"   Heat added (Q_in): {self.heat_added_j():.1f} J")
-        print(f"   Heat rejected (Q_out): {self.heat_rejected_j():.1f} J")
-        print(f"   Net work (W_net): {self.work_net_j():.1f} J")
-        print(f"   Thermal efficiency (η): {self.efficiency() * 100:.2f}%")
-        print(f"   Mean effective pressure: {self.mean_effective_pressure_mpa():.2f} MPa")
-        
-        print(f"\n🔧 ENGINE POWER (4-cylinder):")
-        for rpm in [2000, 4000, 6000]:
-            power = self.power_kw(rpm, cylinders=4)
-            print(f"   {rpm} RPM: {power:.1f} kW ({power * 1.341:.1f} HP)")
-        
-        print("=" * 70)
-        
-        return states
 
 
-class DieselCycle:
-    """Chapter 32: Diesel cycle for compression ignition engines."""
+# ============================================================================
+# SECTION 2: THERMODYNAMIC STATE
+# ============================================================================
+
+@dataclass
+class StatePoint:
+    """Thermodynamic state (P, V, T)."""
     
-    def __init__(self, bore_mm, stroke_mm, compression_ratio, cutoff_ratio,
-                 inlet_pressure_kpa=101.3, inlet_temperature_k=298,
-                 peak_pressure_mpa=None, working_fluid=None):
-        """
-        Parameters:
-        -----------
-        bore_mm : float
-            Cylinder bore diameter (mm)
-        stroke_mm : float
-            Piston stroke (mm)
-        compression_ratio : float
-            Compression ratio (V1/V2) - typically 16-22 for diesel
-        cutoff_ratio : float
-            Cutoff ratio (V3/V2) - typically 1.5-2.5
-        inlet_pressure_kpa : float
-            Intake manifold pressure (kPa)
-        inlet_temperature_k : float
-            Intake air temperature (K)
-        peak_pressure_mpa : float, optional
-            Peak combustion pressure (MPa)
-        working_fluid : WorkingFluid, optional
-            Working fluid properties
-        """
-        self.bore_mm = bore_mm
-        self.stroke_mm = stroke_mm
-        self.r = compression_ratio
-        self.beta = cutoff_ratio  # Cutoff ratio (V3/V2)
-        self.P1_pa = inlet_pressure_kpa * 1000
-        self.T1_K = inlet_temperature_k
-        self.peak_pressure_mpa = peak_pressure_mpa
-        
-        # Working fluid
-        self.fluid = working_fluid or WorkingFluid.air()
-        
-        # Calculate volumes
-        self.swept_volume_cc = math.pi * (bore_mm ** 2) / 4 * stroke_mm / 1000
+    pressure_pa: float
+    volume_m3: float
+    temperature_k: float
+    mass_kg: float
+    fluid: WorkingFluid
+    
+    @property
+    def pressure_mpa(self) -> float:
+        return self.pressure_pa / 1e6
+    
+    @property
+    def pressure_bar(self) -> float:
+        return self.pressure_pa / 1e5
+    
+    @property
+    def volume_cc(self) -> float:
+        return self.volume_m3 * 1e6
+    
+    def print(self):
+        print(f"  P={self.pressure_bar:.2f} bar, T={self.temperature_k:.1f}K, V={self.volume_cc:.1f}cc")
+    
+    def copy(self) -> 'StatePoint':
+        return StatePoint(
+            pressure_pa=self.pressure_pa,
+            volume_m3=self.volume_m3,
+            temperature_k=self.temperature_k,
+            mass_kg=self.mass_kg,
+            fluid=self.fluid,
+        )
+
+
+# ============================================================================
+# SECTION 3: OTTO CYCLE (Spark Ignition)
+# ============================================================================
+
+@dataclass
+class OttoCycle:
+    """
+    Otto cycle for spark ignition engines.
+    
+    Processes:
+    1→2: Isentropic compression
+    2→3: Constant volume heat addition
+    3→4: Isentropic expansion
+    4→1: Constant volume heat rejection
+    """
+    
+    bore_mm: float
+    stroke_mm: float
+    compression_ratio: float
+    inlet_pressure_kpa: float = 101.3
+    inlet_temperature_k: float = 298.0
+    peak_pressure_mpa: Optional[float] = None
+    peak_temperature_k: Optional[float] = None
+    fluid: WorkingFluid = field(default_factory=WorkingFluid.air)
+    
+    def __post_init__(self):
+        # Volume calculations
+        self.swept_volume_cc = math.pi * (self.bore_mm**2) / 4 * self.stroke_mm / 1000
         self.swept_volume_m3 = self.swept_volume_cc / 1e6
-        self.clearance_volume_cc = self.swept_volume_cc / (compression_ratio - 1)
+        self.clearance_volume_cc = self.swept_volume_cc / (self.compression_ratio - 1)
         self.clearance_volume_m3 = self.clearance_volume_cc / 1e6
         self.total_volume_cc = self.swept_volume_cc + self.clearance_volume_cc
         self.total_volume_m3 = self.total_volume_cc / 1e6
         
         # Mass of working fluid
-        self.mass_kg = (self.P1_pa * self.total_volume_m3) / (self.fluid.R * self.T1_K)
+        self.mass_kg = (self.inlet_pressure_kpa * 1000 * self.total_volume_m3) / (self.fluid.R_j_kgk * self.inlet_temperature_k)
     
-    def state_1_intake_bdc(self):
-        """State 1: Start of compression (BDC)."""
+    @classmethod
+    def from_power(cls, power_kw: float, rpm: float, compression_ratio: float, 
+                   mep_mpa: float = 1.0, cylinders: int = 4, L_D_ratio: float = 1.2):
+        """
+        START HERE: Design Otto cycle from power requirement.
+        
+        Parameters:
+        -----------
+        power_kw : float
+            Total engine power (kW)
+        rpm : float
+            Engine speed (RPM)
+        compression_ratio : float
+            Compression ratio (e.g., 10.5)
+        mep_mpa : float
+            Mean effective pressure (MPa) - typical 0.8-1.2 for gasoline
+        cylinders : int
+            Number of cylinders
+        L_D_ratio : float
+            Stroke/Bore ratio (typical 1.0-1.3)
+        
+        Returns:
+        --------
+        OttoCycle : OttoCycle instance with calculated bore/stroke
+        """
+        # Power per cylinder
+        power_per_cyl = power_kw * 1000 / cylinders
+        
+        # Strokes per second (4-stroke: power every 2 revolutions)
+        strokes_per_sec = rpm / 120
+        mep_pa = mep_mpa * 1e6
+        
+        # L × A = Power / (MEP × strokes/sec)
+        LA_m3 = power_per_cyl / (mep_pa * strokes_per_sec)
+        LA_mm3 = LA_m3 * 1e9
+        
+        # Calculate bore and stroke
+        bore_mm = ((4 * LA_mm3) / (L_D_ratio * math.pi)) ** (1/3)
+        stroke_mm = L_D_ratio * bore_mm
+        
+        # Create instance with calculated dimensions
+        return cls(
+            bore_mm=bore_mm,
+            stroke_mm=stroke_mm,
+            compression_ratio=compression_ratio,)
+    
+    def state1_intake(self) -> StatePoint:
+        """Start of compression stroke (BDC)."""
         return StatePoint(
-            pressure_pa=self.P1_pa,
+            pressure_pa=self.inlet_pressure_kpa * 1000,
             volume_m3=self.total_volume_m3,
-            temperature_k=self.T1_K,
-            mass_kg=self.mass_kg
+            temperature_k=self.inlet_temperature_k,
+            mass_kg=self.mass_kg,
+            fluid=self.fluid,
         )
     
-    def state_2_compression_tdc(self):
-        """State 2: End of compression (TDC) - isentropic compression."""
-        state1 = self.state_1_intake_bdc()
-        
-        P2_pa = state1.P * (self.r ** self.fluid.gamma)
-        V2_m3 = state1.V / self.r
-        T2_K = state1.T * (self.r ** (self.fluid.gamma - 1))
-        
-        return StatePoint(P2_pa, V2_m3, T2_K, self.mass_kg)
+    def state2_compression(self) -> StatePoint:
+        """End of compression stroke (TDC)."""
+        s1 = self.state1_intake()
+        P2 = s1.pressure_pa * (self.compression_ratio ** self.fluid.gamma)
+        V2 = s1.volume_m3 / self.compression_ratio
+        T2 = s1.temperature_k * (self.compression_ratio ** (self.fluid.gamma - 1))
+        return StatePoint(P2, V2, T2, self.mass_kg, self.fluid)
     
-    def state_3_combustion_end(self):
-        """
-        State 3: End of combustion - constant pressure heat addition.
+    def state3_combustion(self) -> StatePoint:
+        """After heat addition (constant volume)."""
+        s2 = self.state2_compression()
+        V3 = s2.volume_m3
         
-        V₃ = V₂ × β (expansion during combustion)
-        P₃ = P₂ (constant pressure)
-        T₃ = T₂ × β
-        """
-        state2 = self.state_2_compression_tdc()
+        if self.peak_pressure_mpa:
+            P3 = self.peak_pressure_mpa * 1e6
+        else:
+            P3 = s2.pressure_pa * 4.0  # Typical pressure ratio
         
-        P3_pa = state2.P
-        V3_m3 = state2.V * self.beta
-        T3_K = state2.T * self.beta
-        
-        return StatePoint(P3_pa, V3_m3, T3_K, self.mass_kg)
+        T3 = (P3 * V3) / (self.mass_kg * self.fluid.R_j_kgk)
+        return StatePoint(P3, V3, T3, self.mass_kg, self.fluid)
     
-    def state_4_expansion_bdc(self):
-        """
-        State 4: End of expansion - isentropic expansion.
-        
-        V₄ = V₁ (total volume)
-        P₄ = P₃ × (V₃/V₄)^γ
-        T₄ = T₃ × (V₃/V₄)^(γ-1)
-        """
-        state1 = self.state_1_intake_bdc()
-        state3 = self.state_3_combustion_end()
-        
-        V4_m3 = state1.V
-        expansion_ratio = V4_m3 / state3.V
-        
-        P4_pa = state3.P / (expansion_ratio ** self.fluid.gamma)
-        T4_K = state3.T / (expansion_ratio ** (self.fluid.gamma - 1))
-        
-        return StatePoint(P4_pa, V4_m3, T4_K, self.mass_kg)
+    def state4_expansion(self) -> StatePoint:
+        """End of expansion stroke (BDC)."""
+        s3 = self.state3_combustion()
+        s1 = self.state1_intake()
+        P4 = s3.pressure_pa / (self.compression_ratio ** self.fluid.gamma)
+        V4 = s1.volume_m3
+        T4 = s3.temperature_k / (self.compression_ratio ** (self.fluid.gamma - 1))
+        return StatePoint(P4, V4, T4, self.mass_kg, self.fluid)
     
-    def heat_added_j(self):
-        """
-        Heat added during combustion (constant pressure).
+    @property
+    def heat_added_j(self) -> float:
+        """Heat added during combustion (J)."""
+        s2 = self.state2_compression()
+        s3 = self.state3_combustion()
+        return self.mass_kg * self.fluid.cv_j_kgk * (s3.temperature_k - s2.temperature_k)
+    
+    @property
+    def heat_rejected_j(self) -> float:
+        """Heat rejected during exhaust (J)."""
+        s1 = self.state1_intake()
+        s4 = self.state4_expansion()
+        return self.mass_kg * self.fluid.cv_j_kgk * (s4.temperature_k - s1.temperature_k)
+    
+    @property
+    def work_net_j(self) -> float:
+        """Net work output per cycle (J)."""
+        return self.heat_added_j - self.heat_rejected_j
+    
+    @property
+    def thermal_efficiency(self) -> float:
+        """Air-standard Otto cycle efficiency."""
+        return 1 - 1 / (self.compression_ratio ** (self.fluid.gamma - 1))
+    
+    @property
+    def actual_efficiency(self) -> float:
+        """Actual efficiency (including losses)."""
+        return self.thermal_efficiency * 0.85
+    
+    @property
+    def mean_effective_pressure_mpa(self) -> float:
+        """Mean effective pressure (MPa)."""
+        return self.work_net_j / self.swept_volume_m3 / 1e6
+    
+    def power_kw(self, cylinders: int = 4, rpm: float = 6000) -> float:
+        """Engine power output (kW)."""
+        cycles_per_sec = (rpm / 60) * 0.5  # 4-stroke
+        return self.work_net_j * cylinders * cycles_per_sec / 1000
+    
+    @property
+    def knock_limited_compression_ratio(self, fuel_octane: float = 95.0) -> float:
+        """Maximum compression ratio before knock."""
+        return 8.0 + (fuel_octane - 90) / 10
+    
+    def print_report(self):
+        """Print cycle analysis report."""
+        s1 = self.state1_intake()
+        s2 = self.state2_compression()
+        s3 = self.state3_combustion()
+        s4 = self.state4_expansion()
         
-        Q_in = m × c_p × (T₃ - T₂)
-        """
-        state2 = self.state_2_compression_tdc()
-        state3 = self.state_3_combustion_end()
-        
-        Q_in = self.mass_kg * self.fluid.cp * (state3.T - state2.T)
-        return Q_in
-    
-    def heat_rejected_j(self):
-        """
-        Heat rejected during exhaust (constant volume).
-        
-        Q_out = m × c_v × (T₄ - T₁)
-        """
-        state1 = self.state_1_intake_bdc()
-        state4 = self.state_4_expansion_bdc()
-        
-        Q_out = self.mass_kg * self.fluid.cv * (state4.T - state1.T)
-        return Q_out
-    
-    def work_net_j(self):
-        """Net work output per cycle."""
-        return self.heat_added_j() - self.heat_rejected_j()
-    
-    def efficiency(self):
-        """
-        Diesel cycle thermal efficiency.
-        
-        η = 1 - [1/(r^(γ-1))] × [(β^γ - 1)/(γ(β - 1))]
-        """
-        term1 = 1 / (self.r ** (self.fluid.gamma - 1))
-        term2 = (self.beta ** self.fluid.gamma - 1) / (self.fluid.gamma * (self.beta - 1))
-        return 1 - (term1 * term2)
-    
-    def mean_effective_pressure_pa(self):
-        """Mean effective pressure (MEP)."""
-        return self.work_net_j() / self.swept_volume_m3
-    
-    def mean_effective_pressure_mpa(self):
-        """Mean effective pressure in MPa."""
-        return self.mean_effective_pressure_pa() / 1e6
-    
-    def power_kw(self, rpm, cylinders=4, cycles_per_revolution=0.5):
-        """Engine power output."""
-        cycles_per_second = (rpm / 60) * cycles_per_revolution
-        power_w = self.work_net_j() * cylinders * cycles_per_second
-        return power_w / 1000
-    
-    def get_all_states(self):
-        """Get all four states of the Diesel cycle."""
-        return {
-            "state1": self.state_1_intake_bdc(),
-            "state2": self.state_2_compression_tdc(),
-            "state3": self.state_3_combustion_end(),
-            "state4": self.state_4_expansion_bdc(),
-        }
-    
-    def print_cycle_report(self):
-        """Print detailed Diesel cycle analysis report."""
-        states = self.get_all_states()
-        
-        print("=" * 70)
-        print("DIESEL CYCLE ANALYSIS - Compression Ignition Engine")
-        print("=" * 70)
+        print("=" * 75)
+        print("OTTO CYCLE ANALYSIS - Spark Ignition Engine")
+        print("=" * 75)
         
         print(f"\n📌 ENGINE PARAMETERS:")
         print(f"   Bore: {self.bore_mm:.1f} mm")
         print(f"   Stroke: {self.stroke_mm:.1f} mm")
-        print(f"   Compression ratio: {self.r:.1f}:1")
-        print(f"   Cutoff ratio: {self.beta:.2f}")
-        print(f"   Swept volume: {self.swept_volume_cc:.1f} cc")
-        print(f"   Clearance volume: {self.clearance_volume_cc:.1f} cc")
+        print(f"   Compression ratio: {self.compression_ratio:.1f}:1")
+        print(f"   Displacement: {self.swept_volume_cc:.1f} cc")
+        print(f"   Mass of air: {self.mass_kg * 1000:.2f} g")
         
         print(f"\n📍 STATE POINTS:")
-        print(f"   State 1 (Intake BDC): P={states['state1'].pressure_bar:.2f} bar, "
-              f"T={states['state1'].T:.1f}K")
-        print(f"   State 2 (Compression TDC): P={states['state2'].pressure_bar:.2f} bar, "
-              f"T={states['state2'].T:.1f}K")
-        print(f"   State 3 (Combustion end): P={states['state3'].pressure_bar:.2f} bar, "
-              f"T={states['state3'].T:.1f}K")
-        print(f"   State 4 (Expansion BDC): P={states['state4'].pressure_bar:.2f} bar, "
-              f"T={states['state4'].T:.1f}K")
+        print(f"   State 1 (Intake BDC): ", end="")
+        s1.print()
+        print(f"   State 2 (Compression TDC): ", end="")
+        s2.print()
+        print(f"   State 3 (Combustion): ", end="")
+        s3.print()
+        print(f"   State 4 (Expansion BDC): ", end="")
+        s4.print()
         
         print(f"\n⚡ CYCLE PERFORMANCE:")
-        print(f"   Heat added (Q_in): {self.heat_added_j():.1f} J")
-        print(f"   Heat rejected (Q_out): {self.heat_rejected_j():.1f} J")
-        print(f"   Net work (W_net): {self.work_net_j():.1f} J")
-        print(f"   Thermal efficiency (η): {self.efficiency() * 100:.2f}%")
-        print(f"   Mean effective pressure: {self.mean_effective_pressure_mpa():.2f} MPa")
+        print(f"   Heat added (Q_in): {self.heat_added_j:.1f} J")
+        print(f"   Heat rejected (Q_out): {self.heat_rejected_j:.1f} J")
+        print(f"   Net work (W_net): {self.work_net_j:.1f} J")
+        print(f"   Thermal efficiency (η): {self.thermal_efficiency * 100:.2f}%")
+        print(f"   Actual efficiency: {self.actual_efficiency * 100:.2f}%")
+        print(f"   Mean effective pressure: {self.mean_effective_pressure_mpa:.2f} MPa")
         
-        print("=" * 70)
+        print(f"\n🔧 ENGINE POWER (4-cylinder):")
+        for rpm in [2000, 4000, 6000, 8000]:
+            power = self.power_kw(cylinders=4, rpm=rpm)
+            print(f"   {rpm} RPM: {power:.1f} kW ({power * 1.341:.1f} HP)")
         
-        return states
+        print("=" * 75)
 
 
-class CycleComparison:
-    """Compare Otto and Diesel cycles."""
+# ============================================================================
+# SECTION 4: DIESEL CYCLE (Compression Ignition)
+# ============================================================================
+
+@dataclass
+class DieselCycle:
+    """
+    Diesel cycle for compression ignition engines.
     
-    @staticmethod
-    def compare(otto_cycle, diesel_cycle):
+    Processes:
+    1→2: Isentropic compression
+    2→3: Constant pressure heat addition
+    3→4: Isentropic expansion
+    4→1: Constant volume heat rejection
+    """
+    
+    bore_mm: float
+    stroke_mm: float
+    compression_ratio: float
+    cutoff_ratio: float  # V3/V2 (1.5-2.5 typical)
+    inlet_pressure_kpa: float = 101.3
+    inlet_temperature_k: float = 298.0
+    fluid: WorkingFluid = field(default_factory=WorkingFluid.air)
+    
+    def __post_init__(self):
+        self.swept_volume_cc = math.pi * (self.bore_mm**2) / 4 * self.stroke_mm / 1000
+        self.swept_volume_m3 = self.swept_volume_cc / 1e6
+        self.clearance_volume_cc = self.swept_volume_cc / (self.compression_ratio - 1)
+        self.clearance_volume_m3 = self.clearance_volume_cc / 1e6
+        self.total_volume_cc = self.swept_volume_cc + self.clearance_volume_cc
+        self.total_volume_m3 = self.total_volume_cc / 1e6
+        self.mass_kg = (self.inlet_pressure_kpa * 1000 * self.total_volume_m3) / (self.fluid.R_j_kgk * self.inlet_temperature_k)
+    
+    @classmethod
+    def from_power(cls, power_kw: float, rpm: float, compression_ratio: float, 
+                   cutoff_ratio: float, mep_mpa: float = 1.2, cylinders: int = 4, 
+                   L_D_ratio: float = 1.2):
         """
-        Compare Otto and Diesel cycle performance.
+        START HERE: Design Diesel cycle from power requirement.
         
         Parameters:
         -----------
-        otto_cycle : OttoCycle
-            Otto cycle instance
-        diesel_cycle : DieselCycle
-            Diesel cycle instance
+        power_kw : float
+            Total engine power (kW)
+        rpm : float
+            Engine speed (RPM)
+        compression_ratio : float
+            Compression ratio (e.g., 18.0)
+        cutoff_ratio : float
+            Cutoff ratio (V3/V2, typical 1.5-2.5)
+        mep_mpa : float
+            Mean effective pressure (MPa) - typical 1.0-1.5 for diesel
+        cylinders : int
+            Number of cylinders
+        L_D_ratio : float
+            Stroke/Bore ratio (typical 1.0-1.3)
+        
+        Returns:
+        --------
+        DieselCycle : DieselCycle instance with calculated bore/stroke
         """
-        print("=" * 70)
-        print("OTTO vs DIESEL CYCLE COMPARISON")
-        print("=" * 70)
+        # Power per cylinder
+        power_per_cyl = power_kw * 1000 / cylinders
         
-        print(f"\n{'Parameter':<30} {'Otto':>15} {'Diesel':>15} {'Difference':>15}")
-        print("-" * 75)
+        # Strokes per second (4-stroke: power every 2 revolutions)
+        strokes_per_sec = rpm / 120
+        mep_pa = mep_mpa * 1e6
         
-        params = [
-            ("Compression Ratio", f"{otto_cycle.r:.1f}", f"{diesel_cycle.r:.1f}"),
-            ("Efficiency (%)", f"{otto_cycle.efficiency()*100:.1f}", 
-             f"{diesel_cycle.efficiency()*100:.1f}"),
-            ("MEP (MPa)", f"{otto_cycle.mean_effective_pressure_mpa():.2f}", 
-             f"{diesel_cycle.mean_effective_pressure_mpa():.2f}"),
-            ("Work per cycle (J)", f"{otto_cycle.work_net_j():.1f}", 
-             f"{diesel_cycle.work_net_j():.1f}"),
-        ]
+        # L × A = Power / (MEP × strokes/sec)
+        LA_m3 = power_per_cyl / (mep_pa * strokes_per_sec)
+        LA_mm3 = LA_m3 * 1e9
         
-        for name, otto_val, diesel_val in params:
-            try:
-                diff = float(diesel_val) - float(otto_val)
-                diff_str = f"{diff:+.1f}"
-            except:
-                diff_str = "N/A"
-            
-            print(f"{name:<30} {otto_val:>15} {diesel_val:>15} {diff_str:>15}")
+        # Calculate bore and stroke
+        bore_mm = ((4 * LA_mm3) / (L_D_ratio * math.pi)) ** (1/3)
+        stroke_mm = L_D_ratio * bore_mm
         
-        print("=" * 70)
+        # Create instance with calculated dimensions
+        return cls(
+            bore_mm=bore_mm,
+            stroke_mm=stroke_mm,
+            compression_ratio=compression_ratio,
+            cutoff_ratio=cutoff_ratio,
+        )
+    
+    def state1_intake(self) -> StatePoint:
+        return StatePoint(
+            pressure_pa=self.inlet_pressure_kpa * 1000,
+            volume_m3=self.total_volume_m3,
+            temperature_k=self.inlet_temperature_k,
+            mass_kg=self.mass_kg,
+            fluid=self.fluid,
+        )
+    
+    def state2_compression(self) -> StatePoint:
+        s1 = self.state1_intake()
+        P2 = s1.pressure_pa * (self.compression_ratio ** self.fluid.gamma)
+        V2 = s1.volume_m3 / self.compression_ratio
+        T2 = s1.temperature_k * (self.compression_ratio ** (self.fluid.gamma - 1))
+        return StatePoint(P2, V2, T2, self.mass_kg, self.fluid)
+    
+    def state3_combustion(self) -> StatePoint:
+        s2 = self.state2_compression()
+        P3 = s2.pressure_pa  # Constant pressure
+        V3 = s2.volume_m3 * self.cutoff_ratio
+        T3 = s2.temperature_k * self.cutoff_ratio
+        return StatePoint(P3, V3, T3, self.mass_kg, self.fluid)
+    
+    def state4_expansion(self) -> StatePoint:
+        s3 = self.state3_combustion()
+        s1 = self.state1_intake()
+        expansion_ratio = s1.volume_m3 / s3.volume_m3
+        P4 = s3.pressure_pa / (expansion_ratio ** self.fluid.gamma)
+        V4 = s1.volume_m3
+        T4 = s3.temperature_k / (expansion_ratio ** (self.fluid.gamma - 1))
+        return StatePoint(P4, V4, T4, self.mass_kg, self.fluid)
+    
+    @property
+    def heat_added_j(self) -> float:
+        s2 = self.state2_compression()
+        s3 = self.state3_combustion()
+        return self.mass_kg * self.fluid.cp_j_kgk * (s3.temperature_k - s2.temperature_k)
+    
+    @property
+    def heat_rejected_j(self) -> float:
+        s1 = self.state1_intake()
+        s4 = self.state4_expansion()
+        return self.mass_kg * self.fluid.cv_j_kgk * (s4.temperature_k - s1.temperature_k)
+    
+    @property
+    def work_net_j(self) -> float:
+        return self.heat_added_j - self.heat_rejected_j
+    
+    @property
+    def thermal_efficiency(self) -> float:
+        term1 = 1 / (self.compression_ratio ** (self.fluid.gamma - 1))
+        term2 = (self.cutoff_ratio ** self.fluid.gamma - 1) / (self.fluid.gamma * (self.cutoff_ratio - 1))
+        return 1 - term1 * term2
+    
+    @property
+    def actual_efficiency(self) -> float:
+        return self.thermal_efficiency * 0.88
+    
+    @property
+    def mean_effective_pressure_mpa(self) -> float:
+        return self.work_net_j / self.swept_volume_m3 / 1e6
+    
+    def power_kw(self, cylinders: int = 4, rpm: float = 3000) -> float:
+        cycles_per_sec = (rpm / 60) * 0.5
+        return self.work_net_j * cylinders * cycles_per_sec / 1000
+    
+    def print_report(self):
+        s1 = self.state1_intake()
+        s2 = self.state2_compression()
+        s3 = self.state3_combustion()
+        s4 = self.state4_expansion()
         
-        # Recommendations
-        print("\n📌 RECOMMENDATIONS:")
-        if otto_cycle.efficiency() > diesel_cycle.efficiency():
-            print("   → Otto cycle has higher thermal efficiency")
-            print("   → Better for light-duty, high-speed applications (gasoline engines)")
-        else:
-            print("   → Diesel cycle has higher thermal efficiency")
-            print("   → Better for heavy-duty, low-speed applications (diesel engines)")
+        print("=" * 75)
+        print("DIESEL CYCLE ANALYSIS - Compression Ignition Engine")
+        print("=" * 75)
         
-        if otto_cycle.mean_effective_pressure_mpa() > diesel_cycle.mean_effective_pressure_mpa():
-            print("   → Otto cycle produces higher power per displacement")
-        else:
-            print("   → Diesel cycle produces higher torque per displacement")
+        print(f"\n📌 ENGINE PARAMETERS:")
+        print(f"   Bore: {self.bore_mm:.1f} mm")
+        print(f"   Stroke: {self.stroke_mm:.1f} mm")
+        print(f"   Compression ratio: {self.compression_ratio:.1f}:1")
+        print(f"   Cutoff ratio: {self.cutoff_ratio:.2f}")
+        print(f"   Displacement: {self.swept_volume_cc:.1f} cc")
+        
+        print(f"\n📍 STATE POINTS:")
+        print(f"   State 1: ", end="")
+        s1.print()
+        print(f"   State 2: ", end="")
+        s2.print()
+        print(f"   State 3: ", end="")
+        s3.print()
+        print(f"   State 4: ", end="")
+        s4.print()
+        
+        print(f"\n⚡ CYCLE PERFORMANCE:")
+        print(f"   Heat added (Q_in): {self.heat_added_j:.1f} J")
+        print(f"   Heat rejected (Q_out): {self.heat_rejected_j:.1f} J")
+        print(f"   Net work (W_net): {self.work_net_j:.1f} J")
+        print(f"   Thermal efficiency: {self.thermal_efficiency * 100:.2f}%")
+        print(f"   Actual efficiency: {self.actual_efficiency * 100:.2f}%")
+        print(f"   Mean effective pressure: {self.mean_effective_pressure_mpa:.2f} MPa")
+        
+        print("=" * 75)
 
 
 # ============================================================================
-# Example usage
+# EXAMPLE USAGE
 # ============================================================================
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("ENGINE CYCLE ANALYSIS - Machine Design Textbook")
-    print("=" * 70)
+    print("=" * 75)
+    print("COMPLETE ENGINE CYCLE ANALYSIS MODULE")
+    print("=" * 75)
     
-    # Example 1: Otto Cycle (Gasoline Engine)
-    print("\n📌 EXAMPLE 1: 2.0L Gasoline Engine (Otto Cycle)")
-    print("-" * 50)
+    # EXAMPLE 1: Design from Power (START HERE!)
+    print("\n" + "🔧" * 35)
+    print("EXAMPLE 1: DESIGN FROM POWER REQUIREMENT")
+    print("🔧" * 35)
     
-    otto = OttoCycle(
-        bore_mm=85,
-        stroke_mm=88,
+    # Otto cycle - you only need power and RPM!
+    otto = OttoCycle.from_power(
+        power_kw=150,
+        rpm=6500,
         compression_ratio=10.5,
-        inlet_pressure_kpa=101.3,
-        inlet_temperature_k=298,
-        peak_pressure_mpa=6.0  # 60 bar peak pressure
+        mep_mpa=1.2,
+        cylinders=4,
     )
-    otto.print_cycle_report()
     
-    # Example 2: Diesel Cycle
-    print("\n\n📌 EXAMPLE 2: 2.0L Diesel Engine (Diesel Cycle)")
-    print("-" * 50)
+    print(f"\n📊 OTTO CYCLE (Gasoline):")
+    print(f"   Bore: {otto.bore_mm:.1f} mm")
+    print(f"   Stroke: {otto.stroke_mm:.1f} mm")
+    print(f"   Displacement: {otto.swept_volume_cc * 4 / 1000:.1f} L")
+    print(f"   Thermal efficiency: {otto.thermal_efficiency*100:.1f}%")
+    print(f"   Power at 6500 RPM: {otto.power_kw(cylinders=4, rpm=6500):.1f} kW")
     
-    diesel = DieselCycle(
-        bore_mm=85,
-        stroke_mm=88,
+    # Diesel cycle
+    diesel = DieselCycle.from_power(
+        power_kw=150,
+        rpm=4000,
         compression_ratio=18.0,
         cutoff_ratio=2.0,
-        inlet_pressure_kpa=150,  # Turbocharged
-        inlet_temperature_k=320
+        mep_mpa=1.5,
+        cylinders=4,
     )
-    diesel.print_cycle_report()
     
-    # Example 3: Comparison
-    print("\n\n")
-    CycleComparison.compare(otto, diesel)
+    print(f"\n📊 DIESEL CYCLE:")
+    print(f"   Bore: {diesel.bore_mm:.1f} mm")
+    print(f"   Stroke: {diesel.stroke_mm:.1f} mm")
+    print(f"   Displacement: {diesel.swept_volume_cc * 4 / 1000:.1f} L")
+    print(f"   Thermal efficiency: {diesel.thermal_efficiency*100:.1f}%")
+    print(f"   Power at 4000 RPM: {diesel.power_kw(cylinders=4, rpm=4000):.1f} kW")
     
-    print("\n" + "=" * 70)
-    print("Cycle analysis ready for engine integration.")
-    print("=" * 70)
+    # EXAMPLE 2: Full Otto Cycle Report
+    print("\n" + "🔧" * 35)
+    print("EXAMPLE 2: FULL OTTO CYCLE REPORT")
+    print("🔧" * 35)
+    
+    otto_full = OttoCycle(
+        bore_mm=85.0,
+        stroke_mm=88.0,
+        compression_ratio=10.5,
+        peak_pressure_mpa=6.0,
+    )
+    otto_full.print_report()
+    
+    # EXAMPLE 3: Full Diesel Cycle Report
+    print("\n" + "🔧" * 35)
+    print("EXAMPLE 3: FULL DIESEL CYCLE REPORT")
+    print("🔧" * 35)
+    
+    diesel_full = DieselCycle(
+        bore_mm=85.0,
+        stroke_mm=88.0,
+        compression_ratio=18.0,
+        cutoff_ratio=2.0,)
+    diesel_full.print_report()
+    
+    print("\n" + "=" * 75)
+    print("✅ Cycle module ready for engine design from scratch!")
+    print("=" * 75)

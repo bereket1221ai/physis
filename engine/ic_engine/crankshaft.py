@@ -1,253 +1,288 @@
 """
-Engine Design Automation Library (EDAL) - Crankshaft Module
-Implements the full analytical and empirical design procedure from Chapter 32
-(Sections 32.16 - 32.21) for Centre and Side Crankshafts.
+crankshaft.py - Complete Crankshaft Design for IC Engines
 """
 
 import math
-from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from dataclasses import dataclass
+from typing import Dict, Optional
 
+
+# ============================================================================
+# MATERIALS
+# ============================================================================
+
+@dataclass(frozen=True)
+class CrankshaftMaterial:
+    name: str
+    density_kg_m3: float
+    ultimate_tensile_mpa: float
+    yield_strength_mpa: float
+    endurance_limit_bending_mpa: float
+    endurance_limit_shear_mpa: float
+    allowable_bending_mpa: float
+    allowable_shear_mpa: float
+    youngs_modulus_gpa: float
+    hardness_hb: float
+
+
+CRANKSHAFT_MATERIALS = {
+    "Chrome Nickel Steel": CrankshaftMaterial(
+        name="Chrome Nickel Steel", density_kg_m3=7850, ultimate_tensile_mpa=900,
+        yield_strength_mpa=750, endurance_limit_bending_mpa=525,
+        endurance_limit_shear_mpa=290, allowable_bending_mpa=175,
+        allowable_shear_mpa=97, youngs_modulus_gpa=205, hardness_hb=350,
+    ),
+    "Carbon Steel": CrankshaftMaterial(
+        name="Carbon Steel", density_kg_m3=7850, ultimate_tensile_mpa=600,
+        yield_strength_mpa=450, endurance_limit_bending_mpa=225,
+        endurance_limit_shear_mpa=124, allowable_bending_mpa=75,
+        allowable_shear_mpa=42, youngs_modulus_gpa=200, hardness_hb=250,
+    ),
+}
+
+
+def get_crankshaft_material(name: str):
+    return CRANKSHAFT_MATERIALS[name]
+
+
+# ============================================================================
+# LOADS
+# ============================================================================
 
 @dataclass(frozen=True)
 class CrankshaftLoads:
-    """
-    Evaluates and holds the engine force dynamics acting on the crankshaft assembly.
-    Derived from Section 32.18 of the textbook methodology.
-    """
     bore_mm: float
     stroke_mm: float
-    p_dead_mpa: float          # Maximum gas pressure at dead centre
-    p_torque_mpa: float        # Gas pressure at maximum torque position
+    p_dead_mpa: float
+    p_torque_mpa: float
     flywheel_weight_N: float
     belt_pull_N: float
-    l_r_ratio: float = 5.0     # Connecting rod length to crank radius ratio (n)
-    theta_deg: float = 35.0    # Crank angle for maximum twisting moment
+    l_r_ratio: float = 5.0
+    theta_deg: float = 35.0
 
     @property
     def crank_radius_mm(self) -> float:
         return self.stroke_mm / 2.0
 
     @property
+    def crank_radius_m(self) -> float:
+        return self.stroke_mm / 2000.0
+
+    @property
     def piston_area_mm2(self) -> float:
-        return (math.pi * (self.bore_mm ** 2)) / 4.0
+        return math.pi * self.bore_mm ** 2 / 4.0
 
     @property
     def FP_dead_N(self) -> float:
-        """Piston gas force at dead centre position."""
         return self.piston_area_mm2 * self.p_dead_mpa
 
     @property
-    def FP_torque_N(self) -> float:
-        """Piston gas force at maximum torque position."""
-        return self.piston_area_mm2 * self.p_torque_mpa
+    def FP_dead_kN(self) -> float:
+        return self.FP_dead_N / 1000
 
-    def evaluate_torque_forces(self) -> Dict[str, float]:
-        """Calculates oblique engine forces (FQ, FT, FR) for Case 2."""
+    def evaluate_torque_forces(self):
         theta_rad = math.radians(self.theta_deg)
-        # sin(phi) = sin(theta) / (l/r)
         sin_phi = math.sin(theta_rad) / self.l_r_ratio
-        phi_rad = math.asin(min(1.0, max(-1.0, sin_phi)))
-        
-        # Force in connecting rod (FQ)
-        FQ = self.FP_torque_N / math.cos(phi_rad)
-        # Tangential force driving torque (FT)
+        phi_rad = math.asin(max(-0.5, min(0.5, sin_phi)))
+        FQ = self.FP_dead_N / math.cos(phi_rad)
         FT = FQ * math.sin(theta_rad + phi_rad)
-        # Radial force squeezing down the crank web (FR)
         FR = FQ * math.cos(theta_rad + phi_rad)
-        
-        return {"FQ_N": FQ, "FT_N": FT, "FR_N": FR}
+        return {"FQ_N": FQ, "FT_N": FT, "FR_N": FR, "phi_deg": math.degrees(phi_rad)}
 
+
+# ============================================================================
+# FATIGUE
+# ============================================================================
+
+class CrankshaftFatigue:
+    def __init__(self, material, bending_stress_mpa, shear_stress_mpa):
+        self.material = material
+        self.bending = bending_stress_mpa
+        self.shear = shear_stress_mpa
+    
+    def goodman_fos(self):
+        vm = math.sqrt(self.bending**2 + 3 * self.shear**2)
+        if vm <= 0:
+            return 999
+        return self.material.endurance_limit_bending_mpa / vm
+
+
+# ============================================================================
+# RESULT
+# ============================================================================
+
+@dataclass
+class CentreCrankshaftResult:
+    bearing_span_mm: float
+    crankpin_diameter_mm: float
+    crankpin_length_mm: float
+    web_thickness_mm: float
+    web_width_mm: float
+    shaft_flywheel_diameter_mm: float
+    shaft_junction_diameter_mm: float
+    gas_force_kN: float
+    tangential_force_kN: float
+    radial_force_kN: float
+    bending_stress_mpa: float
+    shear_stress_mpa: float
+    von_mises_stress_mpa: float
+    goodman_fos: float
+    material_name: str
+    mass_kg: float
+    
+    def print_report(self):
+        print("=" * 75)
+        print("CENTRE CRANKSHAFT DESIGN REPORT")
+        print("=" * 75)
+        print(f"\n📐 DIMENSIONS:")
+        print(f"   Bearing span: {self.bearing_span_mm:.1f} mm")
+        print(f"   Crankpin diameter: {self.crankpin_diameter_mm:.2f} mm")
+        print(f"   Crankpin length: {self.crankpin_length_mm:.2f} mm")
+        print(f"   Web thickness: {self.web_thickness_mm:.2f} mm")
+        print(f"   Web width: {self.web_width_mm:.2f} mm")
+        print(f"   Flywheel shaft diameter: {self.shaft_flywheel_diameter_mm:.2f} mm")
+        print(f"   Junction shaft diameter: {self.shaft_junction_diameter_mm:.2f} mm")
+        print(f"\n⚡ FORCES:")
+        print(f"   Gas force: {self.gas_force_kN:.1f} kN")
+        print(f"   Tangential force: {self.tangential_force_kN:.1f} kN")
+        print(f"   Radial force: {self.radial_force_kN:.1f} kN")
+        print(f"\n📊 STRESS ANALYSIS:")
+        print(f"   Bending stress: {self.bending_stress_mpa:.1f} MPa")
+        print(f"   Shear stress: {self.shear_stress_mpa:.1f} MPa")
+        print(f"   Von Mises stress: {self.von_mises_stress_mpa:.1f} MPa")
+        print(f"\n🔄 FATIGUE ANALYSIS:")
+        print(f"   Goodman FOS: {self.goodman_fos:.2f}")
+        print(f"\n🏗️ MATERIAL:")
+        print(f"   Material: {self.material_name}")
+        print(f"   Mass: {self.mass_kg:.2f} kg")
+        print("=" * 75)
+
+
+# ============================================================================
+# DESIGNER
+# ============================================================================
 
 class CentreCrankshaftDesigner:
-    """
-    Automates Section 32.20 (Example 32.4) for a 3-bearing centre crankshaft.
-    Includes geometric overlap loops and stress concentration integration.
-    """
-    def __init__(
-        self, 
-        loads: CrankshaftLoads, 
-        sigma_b_mpa: float = 75.0, 
-        tau_mpa: float = 35.0,
-        pb_mpa: float = 10.0,
-        fillet_concentration_factor: float = 1.8
-    ):
+    def __init__(self, loads: CrankshaftLoads, material_name: str = "Carbon Steel",
+                 sigma_b_mpa: Optional[float] = None, tau_mpa: Optional[float] = None,
+                 pb_mpa: float = 10.0):
         self.loads = loads
-        self.sigma_b = sigma_b_mpa
-        self.tau = tau_mpa
+        self.material = get_crankshaft_material(material_name)
+        self.sigma_b = sigma_b_mpa or self.material.allowable_bending_mpa
+        self.tau = tau_mpa or self.material.allowable_shear_mpa
         self.pb = pb_mpa
-        self.Kt = fillet_concentration_factor
-        self.results: Dict[str, Any] = {}
-        self._execute_design()
-
-    def _execute_design(self):
+        self.results = self._execute()
+    
+    def _execute(self):
         f = self.loads
         D = f.bore_mm
-        r = f.crank_radius_mm
-
-        # Step 1: Establish default textbook bearing span (b ≈ 2 * D)
-        b_mm = 2.0 * D
-        b1_mm = b2_mm = b_mm / 2.0
-
-        # ====================================================================
-        # CASE 1: Crank at Dead Centre (Max Bending Moment Configuration)
-        # ====================================================================
-        H1_dead = f.FP_dead_N * b2_mm / b_mm
-        MC_pin = H1_dead * b1_mm
+        r_mm = f.crank_radius_mm
+        r_m = f.crank_radius_m
         
-        # Diameter derived from bending: d = ∛(32 * M * Kt / (pi * sigma_b))
-        dc_mm = ((32.0 * MC_pin * self.Kt) / (math.pi * self.sigma_b)) ** (1.0 / 3.0)
-        # Length calculated from allowable bearing pressure: lc = FP / (dc * pb)
-        lc_mm = f.FP_dead_N / (dc_mm * self.pb)
-
-        # Standard empirical proportions for the crank web
-        t_mm = 0.65 * dc_mm + 6.35
-        w_mm = 1.125 * dc_mm + 12.7
-
-        # GEOMETRIC BOUNDARY GUARDRAIL CHECK
-        bearing_space_remaining = b2_mm - (lc_mm / 2.0) - t_mm
-        if bearing_space_remaining <= 0:
-            # Dynamically override and expand the bearing span to resolve geometric conflict
-            b_mm = 2.5 * D
-            b1_mm = b2_mm = b_mm / 2.0
-            H1_dead = f.FP_dead_N * b2_mm / b_mm
-            MC_pin = H1_dead * b1_mm
-            dc_mm = ((32.0 * MC_pin * self.Kt) / (math.pi * self.sigma_b)) ** (1.0 / 3.0)
-            lc_mm = f.FP_dead_N / (dc_mm * self.pb)
-            t_mm = 0.65 * dc_mm + 6.35
-            w_mm = 1.125 * dc_mm + 12.7
-            bearing_space_remaining = b2_mm - (lc_mm / 2.0) - t_mm
-
-        # Shaft layout under flywheel (incorporating overhung weights)
+        b = 2.0 * D
+        b1 = b2 = b / 2.0
+        
+        # Dead centre
+        H1 = f.FP_dead_N * b2 / b
+        MC = H1 * b1
+        
+        # Crankpin diameter
+        dc = ((32.0 * MC) / (math.pi * self.sigma_b)) ** (1/3)
+        lc = f.FP_dead_N / (dc * self.pb)
+        t = 0.65 * dc + 6.35
+        w = 1.125 * dc + 12.7
+        
+        # Flywheel shaft
         V3 = f.flywheel_weight_N / 2.0
         H3p = f.belt_pull_N / 2.0
-        c1_mm = 1.5 * D  # Estimated standard overhang distance
-        MW_flywheel = V3 * c1_mm
-        MT_belt = H3p * c1_mm
-        MS_combined = math.sqrt(MW_flywheel**2 + MT_belt**2)
-        ds_mm = ((32.0 * MS_combined * self.Kt) / (math.pi * self.sigma_b)) ** (1.0 / 3.0)
-
-  
-      # ====================================================================
-        # CASE 2: Crank at Maximum Torque Angle (Combined Torsion/Bending)
-        # ====================================================================
-        t_forces = f.evaluate_torque_forces()
-        FT = t_forces["FT_N"]
-        FR = t_forces["FR_N"]
-
-        HT1 = FT * b2_mm / b_mm
-        HR1 = FR * b2_mm / b_mm
-
-        # 1. Validate crankpin diameter against maximum twisting load
-        MC2_pin = HR1 * b1_mm
-        TC_pin = HT1 * r
-        Te_pin = math.sqrt(MC2_pin**2 + TC_pin**2)
-        dc_torque_demand = ((16.0 * Te_pin * self.Kt) / (math.pi * self.tau)) ** (1.0 / 3.0)
-        dc_mm = max(dc_mm, dc_torque_demand)
-
-        # 2. Validate shaft junction journal size verification
-        R1 = math.sqrt(HT1**2 + HR1**2)
-        MS1_junc = abs(R1 * (b2_mm + lc_mm/2.0 + t_mm/2.0) - t_forces["FQ_N"] * (lc_mm/2.0 + t_mm/2.0))
-        TS_junc = FT * r
-        Te_junc = math.sqrt(MS1_junc**2 + TS_junc**2)
-        ds1_mm = ((16.0 * Te_junc * self.Kt) / (math.pi * self.tau)) ** (1.0 / 3.0)
-
-        # 3. ADD THIS FIX: Validate Flywheel Shaft against Combined Bending + Torque
-        # Equivalent Twisting Moment on Flywheel Shaft
-        Te_flywheel = math.sqrt(MS_combined**2 + TS_junc**2)
-        ds_torque_demand = ((16.0 * Te_flywheel * self.Kt) / (math.pi * self.tau)) ** (1.0 / 3.0)
-        ds_mm = max(ds_mm, ds_torque_demand)  # Choose the larger diameter constraint
-
-        # Final structural parameters storage
-        self.results = {
-            "configuration": "Centre Crankshaft (3 Bearings)",
-            "bearing_span_mm": round(b_mm, 2),
-            "crankpin_diameter_mm": round(dc_mm, 2),
-            "crankpin_length_mm": round(lc_mm, 2),
-            "web_thickness_mm": round(t_mm, 2),
-            "web_width_mm": round(w_mm, 2),
-            "shaft_flywheel_diameter_mm": round(ds_mm, 2),
-            "shaft_junction_diameter_mm": round(ds1_mm, 2),
-            "clearance_margin_mm": round(max(0.0, bearing_space_remaining), 2)
-        }
-        return self.results
-
-
-class SideCrankshaftDesigner:
-    """
-    Automates Section 32.21 (Example 32.5) for a 2-bearing overhung side crankshaft.
-    Enforces empirical cross-section proportion safety clamps.
-    """
-    def __init__(
-        self, 
-        loads: CrankshaftLoads, 
-        sigma_b_mpa: float = 60.0, 
-        tau_mpa: float = 35.0,
-        pb_mpa: float = 10.0,
-        fillet_concentration_factor: float = 1.8
-    ):
-        self.loads = loads
-        self.sigma_b = sigma_b_mpa
-        self.tau = tau_mpa
-        self.pb = pb_mpa
-        self.Kt = fillet_concentration_factor
-        self.results: Dict[str, Any] = {}
-        self._execute_design()
-
-    def _execute_design(self):
-        f = self.loads
-        r = f.crank_radius_mm
-
-        # Standard analytical textbook aspect ratios for initial design estimates
-        lc_dc_ratio = 0.8
-        t_dc_ratio = 0.6
-        l1_dc_ratio = 1.7
-
-        # ====================================================================
-        # CASE 1: Crank at Dead Centre
-        # ====================================================================
-        # Crankpin sized via bearing pressure allocation constraints
-        dc_mm = math.sqrt(f.FP_dead_N / (lc_dc_ratio * self.pb))
-        lc_mm = lc_dc_ratio * dc_mm
-        t_mm = t_dc_ratio * dc_mm
-        l1_mm = l1_dc_ratio * dc_mm  # Main journal bearing length
-
-        # Analytical determination of bearing journal distance 'a'
-        a_mm = 0.75 * lc_mm + t_mm + 0.5 * l1_mm
-        M_journal = f.FP_dead_N * a_mm
-        d1_mm = ((32.0 * M_journal * self.Kt) / (math.pi * self.sigma_b)) ** (1.0 / 3.0)
-
-        # Crank web width determination from bending section modulus logic
-        M_web = f.FP_dead_N * (0.75 * lc_mm + 0.5 * t_mm)
-        numerator = 6.0 * M_web + f.FP_dead_N * t_mm
-        w_mm = math.sqrt(numerator / (self.sigma_b * t_mm))
+        c1 = 1.5 * D
+        MS = math.sqrt((V3 * c1)**2 + (H3p * c1)**2)
+        ds = ((32.0 * MS) / (math.pi * self.sigma_b)) ** (1/3)
         
-        # Structural Clamp: Ensure the web width does not narrow below the pin diameter boundary
-        w_mm = max(w_mm, 1.4 * dc_mm)
-
-        # ====================================================================
-        # CASE 2: Crank at Max Torque Angle (Combined Loading Matrix)
-        # ====================================================================
-        t_forces = f.evaluate_torque_forces()
-        FT = t_forces["FT_N"]
-        FR = t_forces["FR_N"]
-
-        # Calculate torque metrics at shaft journal junction location
-        M_junc = t_forces["FQ_N"] * (0.75 * lc_mm + t_mm)
-        TS_junc = FT * r
-        Te_junc = math.sqrt(M_junc**2 + TS_junc**2)
-        ds1_mm = ((16.0 * Te_junc * self.Kt) / (math.pi * self.tau)) ** (1.0 / 3.0)
-
-        # Choose safe max diameter sizing across both execution conditions
-        final_main_journal_dia = max(d1_mm, ds1_mm)
-
-        self.results = {
-            "configuration": "Side/Overhung Crankshaft (2 Bearings)",
-            "crankpin_diameter_mm": round(dc_mm, 2),
-            "crankpin_length_mm": round(lc_mm, 2),
-            "web_thickness_mm": round(t_mm, 2),
-            "web_width_mm": round(w_mm, 2),
-            "main_journal_diameter_mm": round(final_main_journal_dia, 2),
-            "main_journal_length_mm": round(l1_mm, 2)
-        }
+        # Max torque
+        tf = f.evaluate_torque_forces()
+        FT = tf["FT_N"]
+        FR = tf["FR_N"]
+        
+        HT1 = FT * b2 / b
+        HR1 = FR * b2 / b
+        
+        R1 = math.sqrt(HT1**2 + HR1**2)
+        MS1 = abs(R1 * (b2 + lc/2 + t/2) - tf["FQ_N"] * (lc/2 + t/2))
+        TS = FT * r_mm
+        Te = math.sqrt(MS1**2 + TS**2)
+        ds1 = ((16.0 * Te) / (math.pi * self.tau)) ** (1/3)
+        
+        Te_fly = math.sqrt(MS**2 + TS**2)
+        ds_torque = ((16.0 * Te_fly) / (math.pi * self.tau)) ** (1/3)
+        ds = max(ds, ds_torque)
+        
+        # ================================================================
+        # ACTUAL STRESS CALCULATIONS (IN MPa)
+        # ================================================================
+        
+        # Convert to meters for stress calculation
+        dc_m = dc / 1000
+        MC_Nm = MC / 1000  # Convert to N-m
+        
+        # Bending stress
+        I = math.pi * dc_m**4 / 64
+        c_m = dc_m / 2
+        bending_stress = (MC_Nm * c_m) / I / 1e6
+        
+        # Shear stress (torsion)
+        J = math.pi * dc_m**4 / 32
+        TC_Nm = HT1 * (r_mm / 1000)
+        shear_stress = (TC_Nm * c_m) / J / 1e6
+        
+        # Von Mises
+        vm = math.sqrt(bending_stress**2 + 3 * shear_stress**2)
+        
+        # Fatigue
+        fatigue = CrankshaftFatigue(self.material, bending_stress, shear_stress)
+        fos = fatigue.goodman_fos()
+        
+        # Mass
+        vol = math.pi * (dc/2)**2 * lc + math.pi * (ds/2)**2 * b
+        mass = vol / 1e9 * self.material.density_kg_m3
+        
+        return CentreCrankshaftResult(
+            bearing_span_mm=b,
+            crankpin_diameter_mm=dc,
+            crankpin_length_mm=lc,
+            web_thickness_mm=t,
+            web_width_mm=w,
+            shaft_flywheel_diameter_mm=ds,
+            shaft_junction_diameter_mm=ds1,
+            gas_force_kN=f.FP_dead_kN,
+            tangential_force_kN=FT/1000,
+            radial_force_kN=FR/1000,
+            bending_stress_mpa=bending_stress,
+            shear_stress_mpa=shear_stress,
+            von_mises_stress_mpa=vm,
+            goodman_fos=fos,
+            material_name=self.material.name,
+            mass_kg=mass,)
+    
+    def get_results(self):
         return self.results
+    
+    def print_report(self):
+        self.results.print_report()
+
+
+# ============================================================================
+# TEST
+# ============================================================================
+
+if __name__ == "__main__":
+    loads = CrankshaftLoads(
+        bore_mm=350,
+        stroke_mm=500,
+        p_dead_mpa=3.5,
+        p_torque_mpa=1.5,
+        flywheel_weight_N=40000,
+        belt_pull_N=5000,)
+
+    crank = CentreCrankshaftDesigner(loads, material_name="Chrome Nickel Steel")
+    crank.print_report()

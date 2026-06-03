@@ -160,7 +160,6 @@ class EngineThermodynamics:
         """
         # Power per cylinder
         power_per_cylinder_w = self.indicated_power_w / number_of_cylinders
-        
         # Volume displaced per second per cylinder = L × A
         volume_flow_m3_s = power_per_cylinder_w / self.mep_pa
         
@@ -486,95 +485,38 @@ class CylinderDesignResult:
         print(f"   Cylinder mass: {self.cylinder_mass_kg:.2f} kg")
         
         print("\n" + "=" * 75)
+
 class CylinderDesigner:
-    """
-    Complete cylinder design from scratch.
-    
-    Integrates:
-    1. Power-based bore/stroke calculation
-    2. Thermal analysis (Fourier)
-    3. Mechanical stress (Lame)
-    4. Coupled thermo-mechanical stress
-    5. Iterative thickness optimization
-    6. Cylinder head and stud design
-    7. Cooling system sizing
-    """
-    
     def __init__(
         self,
-        brake_power_kw: float,
-        engine_rpm: float,
-        mean_effective_pressure_mpa: float,
+        bore_mm: float,
+        stroke_mm: float,
+        max_pressure_mpa: float,
+        max_power_kw: float,
+        max_rpm: float,
         number_of_cylinders: int = 4,
         material_name: str = "Compact Graphite Iron (CGI)",
         target_fs: float = 3.0,
         cooling_type: str = "water",
-        stroke_to_bore_ratio: float = 1.2,
-        is_four_stroke: bool = True,
-        mechanical_efficiency: float = 0.85,
-        heat_to_walls_fraction: float = 0.33,):
-        """
-        Initialize cylinder designer.
-        
-        Parameters:
-        -----------
-        brake_power_kw : float
-            Total engine brake power (kW)
-        engine_rpm : float
-            Engine speed (RPM)
-        mean_effective_pressure_mpa : float
-            Indicated mean effective pressure (MPa)
-        number_of_cylinders : int
-            Number of cylinders
-        material_name : str
-            Cylinder material
-        target_fs : float
-            Target factor of safety (minimum)
-        cooling_type : str
-            'water' or 'air'
-        stroke_to_bore_ratio : float
-            Stroke/bore ratio (1.0-1.5 typical)
-        is_four_stroke : bool
-            True for 4-stroke, False for 2-stroke
-        mechanical_efficiency : float
-            Mechanical efficiency (0.7-0.9)
-        heat_to_walls_fraction : float
-            Fraction of power transferred to cylinder walls (0.25-0.35)
-        """
-        
-        self.brake_power_kw = brake_power_kw
-        self.engine_rpm = engine_rpm
-        self.mep_mpa = mean_effective_pressure_mpa
+    ):
+        self.bore_mm = bore_mm
+        self.stroke_mm = stroke_mm
+        self.max_pressure_mpa = max_pressure_mpa
+        self.max_power_kw = max_power_kw
+        self.max_rpm = max_rpm
         self.cylinders = number_of_cylinders
         self.material = get_material(material_name)
         self.target_fs = target_fs
         self.cooling_type = cooling_type
-        self.heat_fraction = heat_to_walls_fraction
         
-        # Step 1: Calculate bore and stroke from power
-        thermo = EngineThermodynamics(
-            brake_power_kw=brake_power_kw,
-            engine_rpm=engine_rpm,
-            mean_effective_pressure_mpa=mean_effective_pressure_mpa,
-            mechanical_efficiency=mechanical_efficiency,
-            stroke_to_bore_ratio=stroke_to_bore_ratio,
-            is_four_stroke=is_four_stroke,)
-
-        self.bore_mm, self.stroke_mm = thermo.calculate_bore_and_stroke(number_of_cylinders)
+        # Heat flux estimation (33% of power to walls)
+        self.heat_to_walls_kw = max_power_kw * 0.33
         
-        # Step 2: Heat flux estimation
-        self.heat_to_walls_kw = brake_power_kw * self.heat_fraction
-        
-        # Step 3: Maximum cylinder pressure
-        # Typically 8-15× mean effective pressure
-        self.max_pressure_mpa = mean_effective_pressure_mpa * 10
-        
-        # Step 4: Optimize wall thickness
+        # Optimize wall thickness
         self.wall_thickness_mm = self._optimize_wall_thickness()
         
-        # Step 5: Calculate complete design results
+        # Calculate results
         self.results = self._calculate_results()
-    
     def _optimize_wall_thickness(self) -> float:
     
         """

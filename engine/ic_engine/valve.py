@@ -1,826 +1,602 @@
 """
-valve.py - Chapter 32.22: Valve and Valve Gear Mechanism Design
+valve.py - Complete Valve and Valve Train Design
 
-Based on Machine Design textbook (R.S. Khurmi, J.K. Gupta)
-Sections covered:
-- 32.22: Valves
+Sources:
+- Machine Design Textbook (Chapter 32.22-32.24)
+- Internal Combustion Engine Fundamentals - Heywood
+- Valve and Valve Train Design - SAE
+- Mechanical Engineering Design - Shigley
 
-Additional references:
-- Valve types (poppet, sleeve, rotary)
-- Valve materials and heat treatment
-- Valve spring design
-- Valve timing and lift profiles
-- Port flow analysis
-- Valve train dynamics
+Covers:
+- Poppet valve geometry
+- Valve spring design (dynamic)
+- Port flow analysis (discharge coefficient)
+- Heat transfer and cooling
 - Seat pressure and sealing
-- Cooling and lubrication
+- Valve timing and lift profiles
+- Material selection (high temperature alloys)
 """
 
 import math
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, Tuple, List
 
 
+# ============================================================================
+# SECTION 1: VALVE MATERIALS DATABASE
+# ============================================================================
+
+@dataclass(frozen=True)
 class ValveMaterial:
-    """Material properties for engine valves."""
+    """High temperature materials for engine valves."""
     
-    MATERIALS = {
-        "Silicon Chrome Steel (21-4N)": {
-            "density_kg_m3": 7700,
-            "ultimate_tensile_mpa": 950,
-            "yield_strength_mpa": 800,
-            "fatigue_limit_mpa": 350,
-            "youngs_modulus_gpa": 210,
-            "hardness_hb": 350,
-            "max_temperature_c": 850,
-            "thermal_conductivity_w_mk": 22,
-            "coefficient_thermal_expansion_1e6": 11,
-            "description": "Common exhaust valve material",
-            "application": "Exhaust valves",
-        },
-        "Inconel (751)": {
-            "density_kg_m3": 8200,
-            "ultimate_tensile_mpa": 1200,
-            "yield_strength_mpa": 1000,
-            "fatigue_limit_mpa": 450,
-            "youngs_modulus_gpa": 214,
-            "hardness_hb": 380,
-            "max_temperature_c": 980,
-            "thermal_conductivity_w_mk": 11,
-            "coefficient_thermal_expansion_1e6": 12,
-            "description": "High temperature exhaust valves (racing/turbo)",
-            "application": "Exhaust valves",
-        },
-        "Nimonic (80A)": {
-            "density_kg_m3": 8100,
-            "ultimate_tensile_mpa": 1100,
-            "yield_strength_mpa": 900,
-            "fatigue_limit_mpa": 420,
-            "youngs_modulus_gpa": 211,
-            "hardness_hb": 360,
-            "max_temperature_c": 950,
-            "thermal_conductivity_w_mk": 13,
-            "coefficient_thermal_expansion_1e6": 12,
-            "description": "High temperature alloy for extreme conditions",
-            "application": "Exhaust valves",
-        },
-        "Martensitic Steel (X45CrSi9-3)": {
-            "density_kg_m3": 7600,
-            "ultimate_tensile_mpa": 880,
-            "yield_strength_mpa": 720,
-            "fatigue_limit_mpa": 330,
-            "youngs_modulus_gpa": 208,
-            "hardness_hb": 320,
-            "max_temperature_c": 800,
-            "thermal_conductivity_w_mk": 24,
-            "coefficient_thermal_expansion_1e6": 11,
-            "description": "Intake valve material",
-            "application": "Intake valves",
-        },
-        "Titanium (Ti-6Al-4V)": {
-            "density_kg_m3": 4430,
-            "ultimate_tensile_mpa": 950,
-            "yield_strength_mpa": 880,
-            "fatigue_limit_mpa": 480,
-            "youngs_modulus_gpa": 114,
-            "hardness_hb": 330,
-            "max_temperature_c": 550,
-            "thermal_conductivity_w_mk": 7,
-            "coefficient_thermal_expansion_1e6": 9,
-            "description": "High performance intake valves, lightweight",
-            "application": "Intake valves (racing)",
-        },
-        "Stellite (Faced)": {
-            "density_kg_m3": 8400,
-            "ultimate_tensile_mpa": 900,
-            "yield_strength_mpa": 700,
-            "fatigue_limit_mpa": 380,
-            "youngs_modulus_gpa": 230,
-            "hardness_hb": 480,
-            "max_temperature_c": 850,
-            "thermal_conductivity_w_mk": 15,
-            "coefficient_thermal_expansion_1e6": 13,
-            "description": "Hard facing for valve seats",
-            "application": "Valve face coating",
-        },
-    }
+    name: str
+    density_kg_m3: float
+    ultimate_tensile_mpa: float
+    yield_strength_mpa: float
+    youngs_modulus_gpa: float
+    thermal_conductivity_w_mk: float
+    coefficient_thermal_expansion_1e6: float
+    max_temperature_c: float
+    hardness_hb: float
+    wear_resistance: str
+    application: str  # 'intake', 'exhaust', 'both'
     
-    @classmethod
-    def get_material(cls, name):
-        """Get material properties by name."""
-        if name not in cls.MATERIALS:
-            raise ValueError(f"Unknown material: {name}. Available: {list(cls.MATERIALS.keys())}")
-        return cls.MATERIALS[name]
-    
-    @classmethod
-    def list_materials(cls):
-        """List all available valve materials."""
-        return list(cls.MATERIALS.keys())
+    @property
+    def E_mpa(self) -> float:
+        return self.youngs_modulus_gpa * 1000.0
 
 
+# Valve material database
+VALVE_MATERIALS: Dict[str, ValveMaterial] = {
+    "Martensitic Steel (X45CrSi9-3)": ValveMaterial(
+        name="Martensitic Steel (X45CrSi9-3)",
+        density_kg_m3=7600,
+        ultimate_tensile_mpa=880,
+        yield_strength_mpa=720,
+        youngs_modulus_gpa=208,
+        thermal_conductivity_w_mk=24,
+        coefficient_thermal_expansion_1e6=11,
+        max_temperature_c=800,
+        hardness_hb=320,
+        wear_resistance="Good",
+        application="intake",
+    ),
+    "Silicon Chrome Steel (21-4N)": ValveMaterial(
+        name="Silicon Chrome Steel (21-4N)",
+        density_kg_m3=7700,
+        ultimate_tensile_mpa=950,
+        yield_strength_mpa=800,
+        youngs_modulus_gpa=210,
+        thermal_conductivity_w_mk=22,
+        coefficient_thermal_expansion_1e6=11,
+        max_temperature_c=850,
+        hardness_hb=350,
+        wear_resistance="Very Good",
+        application="exhaust",
+    ),
+    "Inconel 751": ValveMaterial(
+        name="Inconel 751",
+        density_kg_m3=8200,
+        ultimate_tensile_mpa=1200,
+        yield_strength_mpa=1000,
+        youngs_modulus_gpa=214,
+        thermal_conductivity_w_mk=11,
+        coefficient_thermal_expansion_1e6=12,
+        max_temperature_c=980,
+        hardness_hb=380,
+        wear_resistance="Excellent",
+        application="exhaust",
+    ),
+    "Nimonic 80A": ValveMaterial(
+        name="Nimonic 80A",
+        density_kg_m3=8100,
+        ultimate_tensile_mpa=1100,
+        yield_strength_mpa=900,
+        youngs_modulus_gpa=211,
+        thermal_conductivity_w_mk=13,
+        coefficient_thermal_expansion_1e6=12,
+        max_temperature_c=950,
+        hardness_hb=360,
+        wear_resistance="Excellent",
+        application="exhaust",
+    ),
+    "Titanium (Ti-6Al-4V)": ValveMaterial(
+        name="Titanium (Ti-6Al-4V)",
+        density_kg_m3=4430,
+        ultimate_tensile_mpa=950,
+        yield_strength_mpa=880,
+        youngs_modulus_gpa=114,
+        thermal_conductivity_w_mk=7,
+        coefficient_thermal_expansion_1e6=9,
+        max_temperature_c=550,
+        hardness_hb=330,
+        wear_resistance="Good",
+        application="intake",
+    ),
+    "Stellite Faced": ValveMaterial(
+        name="Stellite Faced",
+        density_kg_m3=8400,
+        ultimate_tensile_mpa=900,
+        yield_strength_mpa=700,
+        youngs_modulus_gpa=230,
+        thermal_conductivity_w_mk=15,
+        coefficient_thermal_expansion_1e6=13,
+        max_temperature_c=850,
+        hardness_hb=480,
+        wear_resistance="Excellent",
+        application="both",
+    ),
+}
+
+
+def get_valve_material(name: str) -> ValveMaterial:
+    """Get valve material by name."""
+    if name not in VALVE_MATERIALS:
+        raise ValueError(f"Unknown material: {name}. Available: {list(VALVE_MATERIALS.keys())}")
+    return VALVE_MATERIALS[name]
+
+
+# ============================================================================
+# SECTION 2: VALVE GEOMETRY
+# ============================================================================
+
+@dataclass
 class ValveGeometry:
-    """Valve geometric parameters."""
+    """Poppet valve geometric parameters."""
     
-    def __init__(self, head_diameter_mm, stem_diameter_mm=None, valve_type="poppet"):
-        """
-        Parameters:
-        -----------
-        head_diameter_mm : float
-            Diameter of valve head (mm)
-        stem_diameter_mm : float, optional
-            Diameter of valve stem (mm)
-        valve_type : str
-            'poppet', 'sleeve', 'rotary'
-        """
-        self.head_diameter_mm = head_diameter_mm
-        self.head_diameter_m = head_diameter_mm / 1000
-        self.valve_type = valve_type
+    head_diameter_mm: float
+    seat_angle_deg: float = 45.0
+    stem_diameter_mm: Optional[float] = None
+    
+    def __post_init__(self):
+        if self.stem_diameter_mm is None:
+            self.stem_diameter_mm = 0.18 * self.head_diameter_mm
         
-        # Stem diameter (typical: 0.16 to 0.2 × head diameter)
-        if stem_diameter_mm:
-            self.stem_diameter_mm = stem_diameter_mm
-        else:
-            self.stem_diameter_mm = 0.18 * head_diameter_mm
-        
-        self.stem_diameter_m = self.stem_diameter_mm / 1000
-        
-        # Valve seat angles
-        self.seat_angle_deg = 45  # Typical: 30°, 45°, 60°
         self.seat_angle_rad = math.radians(self.seat_angle_deg)
-        
-        # Margin thickness (top of valve head)
-        self.margin_thickness_mm = 0.05 * head_diameter_mm
-        self.margin_thickness_m = self.margin_thickness_mm / 1000
-        
-        # Valve head thickness
-        self.head_thickness_mm = 0.1 * head_diameter_mm
-        self.head_thickness_m = self.head_thickness_mm / 1000
-        
-        # Stem length (approximate)
-        self.stem_length_mm = 5 * head_diameter_mm
-        self.stem_length_m = self.stem_length_mm / 1000
-        
-        # Seat width
-        self.seat_width_mm = 0.03 * head_diameter_mm
-        self.seat_width_m = self.seat_width_mm / 1000
-        
-        # Valve lift (port opening)
-        self.max_lift_mm = 0.25 * head_diameter_mm
-        self.max_lift_m = self.max_lift_mm / 1000
+        self.margin_thickness_mm = 0.05 * self.head_diameter_mm
+        self.head_thickness_mm = 0.1 * self.head_diameter_mm
+        self.stem_length_mm = 5 * self.head_diameter_mm
+        self.seat_width_mm = 0.03 * self.head_diameter_mm
     
-    def valve_head_area_mm2(self):
-        """Area of valve head."""
-        return math.pi * (self.head_diameter_mm**2) / 4
+    @property
+    def head_area_mm2(self) -> float:
+        return math.pi * self.head_diameter_mm**2 / 4
     
-    def valve_head_area_m2(self):
-        """Area of valve head in m²."""
-        return self.valve_head_area_mm2() / 1e6
+    @property
+    def stem_area_mm2(self) -> float:
+        return math.pi * self.stem_diameter_mm**2 / 4
     
-    def valve_stem_area_mm2(self):
-        """Cross-sectional area of valve stem."""
-        return math.pi * (self.stem_diameter_mm**2) / 4
+    def curtain_area_mm2(self, lift_mm: float) -> float:
+        """Flow area when valve is open."""
+        return math.pi * self.head_diameter_mm * lift_mm * math.cos(self.seat_angle_rad)
     
-    def valve_stem_area_m2(self):
-        """Valve stem area in m²."""
-        return self.valve_stem_area_mm2() / 1e6
-    
-    def curtain_area_mm2(self, lift_mm=None):
-        """
-        Curtain area (flow area when valve is open).
-        
-        A_curtain = π × D_head × lift × cos(seat_angle)
-        """
-        if lift_mm is None:
-            lift_mm = self.max_lift_mm
-        
-        area = math.pi * self.head_diameter_mm * lift_mm * math.cos(self.seat_angle_rad)
-        return max(area, 0)
-    
-    def port_area_mm2(self):
-        """Port cross-sectional area (should match curtain area at max lift)."""
-        return self.curtain_area_mm2(self.max_lift_mm)
-    
-    def flow_coefficient(self, lift_mm=None):
-        """
-        Estimated flow coefficient (Cd) based on lift/diameter ratio.
-        """
-        if lift_mm is None:
-            lift_mm = self.max_lift_mm
-        
+    def flow_coefficient(self, lift_mm: float) -> float:
+        """Discharge coefficient (Cd) based on lift/diameter ratio."""
         lift_ratio = lift_mm / self.head_diameter_mm
-        
         if lift_ratio < 0.1:
-            return 0.6
+            return 0.60
         elif lift_ratio < 0.2:
             return 0.65
         elif lift_ratio < 0.3:
-            return 0.7
-        else:
-            return 0.72
+            return 0.70
+        return 0.72
     
-    def valve_mass_kg(self, density_kg_m3=7800):
+    def valve_mass_kg(self, density: float) -> float:
         """Estimate valve mass."""
-        # Head volume (simplified as disc)
-        head_volume_m3 = (self.valve_head_area_m2() * self.head_thickness_m)
-        # Stem volume (cylinder)
-        stem_volume_m3 = (self.valve_stem_area_m2() * self.stem_length_m)
-        
-        total_volume = head_volume_m3 + stem_volume_m3
-        return total_volume * density_kg_m3
+        head_vol = self.head_area_mm2 * self.head_thickness_mm / 1e9
+        stem_vol = self.stem_area_mm2 * self.stem_length_mm / 1e9
+        return (head_vol + stem_vol) * density
 
 
+# ============================================================================
+# SECTION 3: VALVE FORCES AND DYNAMICS
+# ============================================================================
+
+@dataclass
 class ValveForces:
     """Forces acting on valve and valve train."""
     
-    def __init__(self, head_diameter_mm, max_cylinder_pressure_mpa, max_rpm,
-                 valve_mass_kg, valve_spring_rate_n_mm=None):
-        """
-        Parameters:
-        -----------
-        head_diameter_mm : float
-            Valve head diameter (mm)
-        max_cylinder_pressure_mpa : float
-            Maximum cylinder pressure (MPa)
-        max_rpm : float
-            Maximum engine speed (RPM)
-        valve_mass_kg : float
-            Mass of valve (kg)
-        valve_spring_rate_n_mm : float, optional
-            Valve spring rate (N/mm)
-        """
-        self.head_diameter_mm = head_diameter_mm
-        self.head_diameter_m = head_diameter_mm / 1000
-        self.pressure_mpa = max_cylinder_pressure_mpa
-        self.max_rpm = max_rpm
-        self.valve_mass_kg = valve_mass_kg
-        self.spring_rate_n_mm = valve_spring_rate_n_mm or 30  # Typical N/mm
-        
-        # Valve head area
-        self.head_area_m2 = math.pi * (self.head_diameter_m**2) / 4
-        
-        # Angular velocity
-        self.omega = 2 * math.pi * max_rpm / 60
+    head_diameter_mm: float
+    max_cylinder_pressure_mpa: float
+    max_rpm: float
+    valve_mass_kg: float
+    spring_rate_n_mm: float = 30.0
+    preload_mm: float = 20.0
+    max_lift_mm: float = 10.0
     
-    def gas_pressure_force_n(self):
-        """
-        Force from cylinder gas pressure on valve head.
-        
-        F_gas = P_max × A_head
-        """
-        return self.pressure_mpa * 1e6 * self.head_area_m2
+    @property
+    def head_area_m2(self) -> float:
+        return math.pi * (self.head_diameter_mm / 1000)**2 / 4
     
-    def inertia_force_n(self, acceleration_m_s2):
-        """
-        Inertia force from valve motion.
-        
-        F_inertia = m_valve × a
-        """
+    @property
+    def gas_force_n(self) -> float:
+        """Force from cylinder gas pressure."""
+        return self.max_cylinder_pressure_mpa * 1e6 * self.head_area_m2
+    
+    def inertia_force_n(self, acceleration_m_s2: float) -> float:
+        """Inertia force from valve motion."""
         return self.valve_mass_kg * acceleration_m_s2
     
-    def spring_force_n(self, preload_mm=20, lift_mm=10):
-        """
-        Spring force at given lift.
-        
-        F_spring = k × (preload + lift)
-        """
-        return self.spring_rate_n_mm * (preload_mm + lift_mm)
+    @property
+    def spring_force_n(self) -> float:
+        """Spring force at max lift."""
+        return self.spring_rate_n_mm * (self.preload_mm + self.max_lift_mm)
     
-    def seat_force_n(self, preload_mm=20):
-        """
-        Force on valve seat when closed.
-        
-        F_seat = k × preload + gas_pressure
-        """
-        return self.spring_force_n(preload_mm, 0) + self.gas_pressure_force_n()
+    @property
+    def seat_force_n(self) -> float:
+        """Force on valve seat when closed."""
+        return self.spring_rate_n_mm * self.preload_mm + self.gas_force_n
     
-    def max_valve_acceleration_m_s2(self, cam_profile="typical"):
-        """
-        Maximum valve acceleration based on cam profile.
-        
-        Typical: 2000-4000 m/s² for performance engines
-        """
-        if cam_profile == "race":
-            return 4000
-        elif cam_profile == "performance":
-            return 3000
-        else:
-            return 2000
+    @property
+    def max_acceleration_m_s2(self) -> float:
+        """Maximum valve acceleration (simplified)."""
+        # For performance cam profile
+        return 3000.0
     
-    def max_spring_force_n(self, preload_mm=20, lift_mm=10):
-        """
-        Maximum spring force (at max lift + preload).
-        """
-        return self.spring_force_n(preload_mm, lift_mm)
+    @property
+    def max_spring_force_n(self) -> float:
+        """Maximum spring force."""
+        return self.spring_force_n
 
 
+# ============================================================================
+# SECTION 4: VALVE SPRING DESIGN (Dynamic)
+# ============================================================================
+
+@dataclass
 class ValveSpring:
-    """Valve spring design and analysis."""
+    """High-performance valve spring design with surge analysis."""
     
-    def __init__(self, wire_diameter_mm, mean_coil_diameter_mm, active_coils,
-                 free_length_mm, installed_length_mm, material_gpa=80):
-        """
-        Parameters:
-        -----------
-        wire_diameter_mm : float
-            Spring wire diameter (mm)
-        mean_coil_diameter_mm : float
-            Mean diameter of spring coils (mm)
-        active_coils : int
-            Number of active coils
-        free_length_mm : float
-            Free length of spring (mm)
-        installed_length_mm : float
-            Installed length (preload) (mm)
-        material_gpa : float
-            Shear modulus of spring material (GPa)
-        """
-        self.d_mm = wire_diameter_mm
-        self.d_m = wire_diameter_mm / 1000
-        self.D_mm = mean_coil_diameter_mm
-        self.D_m = mean_coil_diameter_mm / 1000
-        self.N = active_coils
-        self.L_free_mm = free_length_mm
-        self.L_installed_mm = installed_length_mm
-        self.G_pa = material_gpa * 1e9
-        
-        # Spring index
-        self.C = self.D_mm / self.d_mm
-        
-        # Wahl factor (stress correction)
+    wire_diameter_mm: float
+    mean_coil_diameter_mm: float
+    active_coils: int
+    free_length_mm: float
+    installed_length_mm: float
+    material_gpa: float = 80.0  # Shear modulus
+    density_kg_m3: float = 7850.0
+    
+    def __post_init__(self):
+        self.d_m = self.wire_diameter_mm / 1000
+        self.D_m = self.mean_coil_diameter_mm / 1000
+        self.C = self.mean_coil_diameter_mm / self.wire_diameter_mm
+        # Wahl factor for curvature stress correction
         self.K_w = (4 * self.C - 1) / (4 * self.C - 4) + 0.615 / self.C
     
-    def spring_rate_n_mm(self):
-        """
-        Spring rate (stiffness).
-        
-        k = G × d⁴ / (8 × D³ × N)
-        """
-        k_n_m = (self.G_pa * self.d_m**4) / (8 * self.D_m**3 * self.N)
-        return k_n_m / 1000  # Convert to N/mm
+    @property
+    def spring_rate_n_mm(self) -> float:
+        """Spring stiffness (N/mm)."""
+        G = self.material_gpa * 1e9
+        k_n_m = (G * self.d_m**4) / (8 * self.D_m**3 * self.active_coils)
+        return k_n_m / 1000
     
-    def preload_mm(self):
-        """Preload (compression from free length to installed length)."""
-        return self.L_free_mm - self.L_installed_mm
+    @property
+    def preload_mm(self) -> float:
+        return self.free_length_mm - self.installed_length_mm
     
-    def max_compression_mm(self, max_lift_mm):
-        """Maximum compression (preload + max lift)."""
-        return self.preload_mm() + max_lift_mm
+    def preload_force_n(self, max_lift_mm: float) -> float:
+        return self.spring_rate_n_mm * (self.preload_mm + max_lift_mm)
     
-    def preload_force_n(self):
-        """Force at installed height (closed valve)."""
-        return self.spring_rate_n_mm() * self.preload_mm()
+    @property
+    def solid_length_mm(self) -> float:
+        return self.active_coils * self.wire_diameter_mm
     
-    def max_force_n(self, max_lift_mm):
-        """Maximum spring force (at full lift)."""
-        return self.spring_rate_n_mm() * self.max_compression_mm(max_lift_mm)
+    def coil_bind_safety(self, max_lift_mm: float) -> float:
+        max_compression = self.preload_mm + max_lift_mm
+        return (self.free_length_mm - self.solid_length_mm) / max_compression
     
-    def maximum_shear_stress_mpa(self, max_lift_mm):
-        """
-        Maximum shear stress in spring wire.
-        
-        τ_max = K_w × (8 × F × D) / (π × d³)
-        """
-        F_max = self.max_force_n(max_lift_mm) * 1000  # Convert to N
-        tau_pa = (self.K_w * 8 * F_max * self.D_m) / (math.pi * self.d_m**3)
-        return tau_pa / 1e6
+    @property
+    def natural_frequency_hz(self) -> float:
+        """Spring natural frequency (avoid resonance)."""
+        G = self.material_gpa * 1e9
+        rho = self.density_kg_m3
+        return (self.wire_diameter_mm / 1000) / (math.pi * (self.mean_coil_diameter_mm/1000)**2 * self.active_coils) * math.sqrt(G / (2 * rho))
     
-    def solid_length_mm(self):
-        """Length when spring is fully compressed (coils touching)."""
-        return self.N * self.d_mm
-    
-    def safety_factor_clearance(self, max_lift_mm):
-        """Safety factor against coil bind."""
-        max_compression = self.max_compression_mm(max_lift_mm)
-        return (self.L_free_mm - self.solid_length_mm()) / max_compression
-    
-    def natural_frequency_hz(self):
-        """
-        Natural frequency of spring (avoid resonance).
-        
-        f_n = (d / (π × D² × N)) × √(G / (2 × ρ))
-        """
-        rho = 7850  # Density of steel (kg/m³)
-        d = self.d_m
-        D = self.D_m
-        G = self.G_pa
-        
-        freq = (d / (math.pi * D**2 * self.N)) * math.sqrt(G / (2 * rho))
-        return freq
-    
-    def valve_float_rpm(self, max_lift_mm):
-        """
-        RPM at which valve float occurs.
-        
-        Engine speed where inertia forces exceed spring force.
-        """
-        spring_force = self.max_force_n(max_lift_mm)
-        # Simplified critical RPM estimation
-        # Varies with valve train design, rough estimate
+    def valve_float_rpm(self, max_lift_mm: float) -> float:
+        """Estimated RPM where valve float occurs."""
+        spring_force = self.preload_force_n(max_lift_mm)
         return math.sqrt(spring_force / 0.0001) * 60
 
 
+# ============================================================================
+# SECTION 5: VALVE SEAT AND SEALING
+# ============================================================================
+
+@dataclass
 class ValveSeat:
     """Valve seat design and analysis."""
     
-    def __init__(self, head_diameter_mm, seat_angle_deg=45, seat_width_mm=None):
-        """
-        Parameters:
-        -----------
-        head_diameter_mm : float
-            Valve head diameter (mm)
-        seat_angle_deg : float
-            Seat angle (degrees) - 30, 45, or 60
-        seat_width_mm : float, optional
-            Seat contact width (mm)
-        """
-        self.head_diameter_mm = head_diameter_mm
-        self.head_diameter_m = head_diameter_mm / 1000
-        self.seat_angle_deg = seat_angle_deg
-        self.seat_angle_rad = math.radians(seat_angle_deg)
-        
-        if seat_width_mm:
-            self.seat_width_mm = seat_width_mm
-        else:
-            self.seat_width_mm = 0.03 * head_diameter_mm
-        
-        self.seat_width_m = self.seat_width_mm / 1000
+    head_diameter_mm: float
+    seat_angle_deg: float = 45.0
+    seat_width_mm: Optional[float] = None
     
-    def seat_contact_area_mm2(self):
-        """Contact area of valve seat."""
-        # Average diameter of seat contact
-        avg_diameter_mm = self.head_diameter_mm - self.seat_width_mm
-        return math.pi * avg_diameter_mm * self.seat_width_mm
+    def __post_init__(self):
+        if self.seat_width_mm is None:
+            self.seat_width_mm = 0.03 * self.head_diameter_mm
+        self.seat_angle_rad = math.radians(self.seat_angle_deg)
     
-    def seat_contact_area_m2(self):
-        """Contact area in m²."""
-        return self.seat_contact_area_mm2() / 1e6
+    @property
+    def contact_diameter_mm(self) -> float:
+        """Mean contact diameter of seat."""
+        return self.head_diameter_mm - self.seat_width_mm
     
-    def seat_pressure_mpa(self, closing_force_n):
-        """
-        Seat contact pressure.
-        
-        p = F_seat / A_contact
-        """
-        area_m2 = self.seat_contact_area_m2()
-        pressure_pa = closing_force_n / area_m2
-        return pressure_pa / 1e6
+    @property
+    def contact_area_mm2(self) -> float:
+        return math.pi * self.contact_diameter_mm * self.seat_width_mm
     
-    def allowable_seat_pressure_mpa(self, material):
-        """
-        Allowable seat pressure based on material.
-        """
-        if "Stellite" in material.get("name", ""):
-            return 200
-        elif "Titanium" in material.get("name", ""):
-            return 150
-        else:
-            return 120
+    def seat_pressure_mpa(self, closing_force_n: float) -> float:
+        return closing_force_n / self.contact_area_mm2 / 1e6
     
-    def recommended_interference_mm(self):
-        """
-        Recommended interference fit between valve and seat.
-        """
-        return 0.05  # mm typical for interference fit
+    @staticmethod
+    def allowable_pressure_mpa(material_name: str) -> float:
+        if "Stellite" in material_name:
+            return 200.0
+        elif "Titanium" in material_name:
+            return 150.0
+        return 120.0
+    
+    @property
+    def recommended_interference_mm(self) -> float:
+        """Interference fit for valve seat insert."""
+        return 0.05 + 0.0003 * self.head_diameter_mm
 
 
+# ============================================================================
+# SECTION 6: VALVE TIMING AND LIFT
+# ============================================================================
+
+@dataclass
 class ValveTiming:
     """Valve timing and lift profile."""
     
-    def __init__(self, max_lift_mm, cam_duration_deg=260, lobe_center_angle_deg=110,
-                 opening_before_tdc_deg=10, closing_after_bdc_deg=10):
-        """
-        Parameters:
-        -----------
-        max_lift_mm : float
-            Maximum valve lift (mm)
-        cam_duration_deg : float
-            Cam duration (degrees of crank rotation)
-        lobe_center_angle_deg : float
-            Lobe center angle (degrees)
-        opening_before_tdc_deg : float
-            Intake valve opening before TDC (degrees)
-        closing_after_bdc_deg : float
-            Intake valve closing after BDC (degrees)
-        """
-        self.max_lift_mm = max_lift_mm
-        self.duration_deg = cam_duration_deg
-        self.lobe_center = lobe_center_angle_deg
-        self.opening_before_tdc = opening_before_tdc_deg
-        self.closing_after_bdc = closing_after_bdc_deg
-        
-        # Derived values
-        self.opening_angle_deg = 360 - opening_before_tdc_deg
-        self.closing_angle_deg = 180 + closing_after_bdc_deg
+    max_lift_mm: float
+    cam_duration_deg: float = 260.0
+    lobe_center_angle_deg: float = 110.0
+    opening_before_tdc_deg: float = 10.0
+    closing_after_bdc_deg: float = 10.0
     
-    def lift_at_crank_angle_mm(self, crank_angle_deg):
-        """
-        Calculate valve lift at given crank angle.
-        
-        Simplified polynomial cam profile.
-        """
-        # Normalize angle within cam duration
-        cam_angle = crank_angle_deg * 0.5  # Cam rotates at half crank speed
-        
-        if cam_angle < 0 or cam_angle > self.duration_deg:
-            return 0
-        
-        # Use symmetric cam profile (simplified)
-        x = (cam_angle / self.duration_deg) * 2 - 1
-        # Polynomial: 1 - x^2 (simplified)
-        lift_ratio = 1 - x**2
-        
-        return self.max_lift_mm * lift_ratio
+    @property
+    def overlap_deg(self) -> float:
+        """Valve overlap period (both valves open)."""
+        return self.opening_before_tdc_deg + self.closing_after_bdc_deg
     
-    def overlap_period_deg(self, intake_opening, exhaust_closing):
-        """
-        Valve overlap period (both valves open).
-        """
-        return intake_opening + exhaust_closing
+    def lift_at_crank_angle(self, crank_angle_deg: float) -> float:
+        """Valve lift at given crank angle (simplified polynomial)."""
+        cam_angle = crank_angle_deg * 0.5
+        if cam_angle < 0 or cam_angle > self.cam_duration_deg:
+            return 0.0
+        x = (cam_angle / self.cam_duration_deg) * 2 - 1
+        return self.max_lift_mm * (1 - x**2)
     
-    def lift_area_mm2_deg(self):
-        """
-        Area under lift curve (flow potential).
-        
-        Approximated by 2/3 × max_lift × duration
-        """
-        return (2/3) * self.max_lift_mm * self.duration_deg
-
-
-class ValveComplete:
-    """Complete valve design integrating all components."""
-    
-    def __init__(self, bore_mm, head_diameter_mm, max_cylinder_pressure_mpa,
-                 max_rpm, valve_type="poppet", application="intake",
-                 material_name=None):
-        """
-        Complete valve design calculator.
-        
-        Parameters:
-        -----------
-        bore_mm : float
-            Cylinder bore diameter (mm)
-        head_diameter_mm : float
-            Valve head diameter (mm)
-        max_cylinder_pressure_mpa : float
-            Maximum cylinder pressure (MPa)
-        max_rpm : float
-            Maximum engine speed (RPM)
-        valve_type : str
-            'poppet', 'sleeve', 'rotary'
-        application : str
-            'intake' or 'exhaust'
-        material_name : str, optional
-            Valve material (auto-selected based on application if not provided)
-        """
-        self.bore_mm = bore_mm
-        self.head_diameter_mm = head_diameter_mm
-        self.pressure_mpa = max_cylinder_pressure_mpa
-        self.max_rpm = max_rpm
-        self.valve_type = valve_type
-        self.application = application
-        
-        # Auto-select material based on application
-        if material_name:
-            self.material_data = ValveMaterial.get_material(material_name)
-        else:
-            if application == "exhaust":
-                default_material = "Silicon Chrome Steel (21-4N)"
-            else:
-                default_material = "Martensitic Steel (X45CrSi9-3)"
-            self.material_data = ValveMaterial.get_material(default_material)
-        
-        self.material_data["name"] = material_name or default_material
-        self.material = self.material_data
-        
-        # Geometry
-        self.geometry = ValveGeometry(head_diameter_mm, valve_type=valve_type)
-        
-        # Initial valve mass estimate
-        self.valve_mass_kg = self.geometry.valve_mass_kg(self.material["density_kg_m3"])
-        
-        # Forces
-        self.forces = ValveForces(
-            head_diameter_mm, max_cylinder_pressure_mpa, max_rpm, self.valve_mass_kg
-        )
-        
-        # Spring (typical design)
-        self.spring = ValveSpring(
-            wire_diameter_mm=4.0,
-            mean_coil_diameter_mm=25,
-            active_coils=6,
-            free_length_mm=60,
-            installed_length_mm=40
-        )
-        
-        # Seat
-        self.seat = ValveSeat(head_diameter_mm)
-        
-        # Timing
-        if application == "intake":
-            self.timing = ValveTiming(self.geometry.max_lift_mm)
-        else:
-            self.timing = ValveTiming(self.geometry.max_lift_mm, cam_duration_deg=280)
-    
-    def design_summary(self):
-        """Generate complete valve design summary."""
-        
-        spring_force_max = self.spring.max_force_n(self.geometry.max_lift_mm)
-        spring_force_preload = self.spring.preload_force_n()
-        gas_force = self.forces.gas_pressure_force_n()
-        seat_force = self.forces.seat_force_n()
-        seat_pressure = self.seat.seat_pressure_mpa(seat_force)
-        
-        summary = {
-            # Basic dimensions
-            "bore_mm": self.bore_mm,
-            "valve_type": self.valve_type,
-            "application": self.application,
-            "head_diameter_mm": self.head_diameter_mm,
-            "head_to_bore_ratio": round(self.head_diameter_mm / self.bore_mm, 2),
-            "stem_diameter_mm": round(self.geometry.stem_diameter_mm, 2),
-            "stem_length_mm": round(self.geometry.stem_length_mm, 1),
-            
-            # Valve geometry
-            "seat_angle_deg": self.geometry.seat_angle_deg,
-            "seat_width_mm": round(self.geometry.seat_width_mm, 3),
-            "margin_thickness_mm": round(self.geometry.margin_thickness_mm, 2),
-            "head_thickness_mm": round(self.geometry.head_thickness_mm, 2),
-            "max_lift_mm": round(self.geometry.max_lift_mm, 2),
-            "curtain_area_mm2": round(self.geometry.curtain_area_mm2(), 1),
-            "flow_coefficient": round(self.geometry.flow_coefficient(), 3),
-            
-            # Forces
-            "gas_force_n": round(gas_force, 1),
-            "spring_preload_n": round(spring_force_preload, 1),
-            "spring_max_force_n": round(spring_force_max, 1),
-            "seat_force_n": round(seat_force, 1),
-            
-            # Seat analysis
-            "seat_contact_area_mm2": round(self.seat.seat_contact_area_mm2(), 2),
-            "seat_pressure_mpa": round(seat_pressure, 1),
-            "allowable_seat_pressure_mpa": self.seat.allowable_seat_pressure_mpa(self.material),
-            
-            # Spring analysis
-            "spring_rate_n_mm": round(self.spring.spring_rate_n_mm(), 2),
-            "spring_preload_mm": round(self.spring.preload_mm(), 1),
-            "spring_max_shear_mpa": round(self.spring.maximum_shear_stress_mpa(self.geometry.max_lift_mm), 1),
-            "spring_natural_frequency_hz": round(self.spring.natural_frequency_hz(), 1),
-            "spring_safety_clearance": round(self.spring.safety_factor_clearance(self.geometry.max_lift_mm), 2),
-            
-            # Timing
-            "cam_duration_deg": self.timing.duration_deg,
-            "valve_overlap_suggestion_deg": self.timing.overlap_period_deg(10, 10),
-            
-            # Material
-            "material": self.material["name"],
-            "material_description": self.material["description"],
-            "max_temperature_c": self.material["max_temperature_c"],
-            "hardness_hb": self.material["hardness_hb"],
-            
-            # Mass
-            "valve_mass_g": round(self.valve_mass_kg * 1000, 1),
-        }
-        
-        return summary
-    
-    def print_design_report(self):
-        """Print formatted design report."""
-        s = self.design_summary()
-        
-        print("=" * 70)
-        print(f"VALVE DESIGN REPORT - {s['application'].upper()} VALVE")
-        print("Machine Design Textbook - Chapter 32.22")
-        print("=" * 70)
-        
-        print(f"\n📐 ENGINE SPECIFICATIONS:")
-        print(f"   Bore: {s['bore_mm']:.1f} mm")
-        print(f"   Max RPM: {self.max_rpm:.0f}")
-        print(f"   Max cylinder pressure: {self.pressure_mpa:.1f} MPa")
-        
-        print(f"\n📏 VALVE DIMENSIONS:")
-        print(f"   Type: {s['valve_type'].title()}")
-        print(f"   Head diameter: {s['head_diameter_mm']:.2f} mm")
-        print(f"   Head/bore ratio: {s['head_to_bore_ratio']:.2f}")
-        print(f"   Stem diameter: {s['stem_diameter_mm']:.2f} mm")
-        print(f"   Stem length: {s['stem_length_mm']:.1f} mm")
-        print(f"   Seat angle: {s['seat_angle_deg']}°")
-        print(f"   Seat width: {s['seat_width_mm']:.3f} mm")
-        print(f"   Margin thickness: {s['margin_thickness_mm']:.2f} mm")
-        print(f"   Head thickness: {s['head_thickness_mm']:.2f} mm")
-        
-        print(f"\n🌊 FLOW CHARACTERISTICS:")
-        print(f"   Max lift: {s['max_lift_mm']:.2f} mm")
-        print(f"   Curtain area: {s['curtain_area_mm2']:.1f} mm²")
-        print(f"   Flow coefficient (Cd): {s['flow_coefficient']:.3f}")
-        
-        print(f"\n⚡ FORCES:")
-        print(f"   Gas pressure force: {s['gas_force_n']:.1f} N")
-        print(f"   Spring preload: {s['spring_preload_n']:.1f} N")
-        print(f"   Spring @ max lift: {s['spring_max_force_n']:.1f} N")
-        print(f"   Seat closing force: {s['seat_force_n']:.1f} N")
-        
-        print(f"\n🔧 VALVE SEAT:")
-        print(f"   Contact area: {s['seat_contact_area_mm2']:.2f} mm²")
-        print(f"   Seat pressure: {s['seat_pressure_mpa']:.1f} MPa")
-        print(f"   Allowable pressure: {s['allowable_seat_pressure_mpa']:.0f} MPa")
-        seat_status = "✅ OK" if s['seat_pressure_mpa'] < s['allowable_seat_pressure_mpa'] else "⚠️ HIGH"
-        print(f"   Status: {seat_status}")
-        
-        print(f"\n🔩 VALVE SPRING:")
-        print(f"   Spring rate: {s['spring_rate_n_mm']:.2f} N/mm")
-        print(f"   Preload: {s['spring_preload_mm']:.1f} mm")
-        print(f"   Max shear stress: {s['spring_max_shear_mpa']:.1f} MPa")
-        print(f"   Natural frequency: {s['spring_natural_frequency_hz']:.1f} Hz")
-        print(f"   Safety factor (coil bind): {s['spring_safety_clearance']:.2f}")
-        
-        print(f"\n⏱️ VALVE TIMING:")
-        print(f"   Cam duration: {s['cam_duration_deg']:.0f}° crank")
-        print(f"   Suggested overlap: {s['valve_overlap_suggestion_deg']:.0f}°")
-        
-        print(f"\n🏗️ MATERIAL:")
-        print(f"   Material: {s['material']}")
-        print(f"   {s['material_description']}")
-        print(f"   Max operating temp: {s['max_temperature_c']}°C")
-        print(f"   Hardness: {s['hardness_hb']} HB")
-        
-        print(f"\n⚖️ MASS:")
-        print(f"   Valve mass: {s['valve_mass_g']:.1f} g")
-        
-        print("\n" + "=" * 70)
-        
-        # Validation checks
-        issues = []
-        if s['seat_pressure_mpa'] > s['allowable_seat_pressure_mpa']:
-            issues.append("⚠️ SEAT PRESSURE EXCEEDS ALLOWABLE")
-        if s['head_to_bore_ratio'] > 0.55:
-            issues.append("⚠️ VALVE HEAD MAY BE TOO LARGE (flow limitation)")
-        if s['head_to_bore_ratio'] < 0.35:
-            issues.append("⚠️ VALVE HEAD MAY BE TOO SMALL (power limitation)")
-        if s['spring_safety_clearance'] < 1.2:
-            issues.append("⚠️ SPRING COULD BIND (add more clearance)")
-        
-        if issues:
-            print("\n⚠️ DESIGN ISSUES / RECOMMENDATIONS:")
-            for issue in issues:
-                print(f"   {issue}")
-        else:
-            print("\n✅ DESIGN ACCEPTABLE - All criteria satisfied")
-        
-        print("=" * 70)
-        
-        # Design tips
-        print("\n💡 DESIGN TIPS:")
-        if self.application == "intake":
-            print("   • Larger intake valves improve volumetric efficiency")
-            print("   • 2 intake valves per cylinder improve flow and reduce mass")
-        else:
-            print("   • Exhaust valves require higher temperature materials")
-            print("   • Sodium-filled stems improve cooling (racing applications)")
-        print("   • Multi-angle valve seats improve flow (30°/45°/60°)")
-        print("   • Valve seat interference: 0.05-0.10 mm for aluminum heads")
-        print("   • Avoid valve spring resonance (natural frequency above engine harmonics)")
+    @property
+    def lift_area_mm2_deg(self) -> float:
+        """Area under lift curve (flow potential)."""
+        return (2/3) * self.max_lift_mm * self.cam_duration_deg
 
 
 # ============================================================================
-# Example usage
+# SECTION 7: COMPLETE VALVE RESULT
+# ============================================================================
+
+@dataclass
+class ValveDesignResult:
+    """Complete valve design results."""
+    
+    # Geometry
+    head_diameter_mm: float
+    stem_diameter_mm: float
+    seat_angle_deg: float
+    seat_width_mm: float
+    max_lift_mm: float
+    head_thickness_mm: float
+    margin_thickness_mm: float
+    
+    # Flow
+    curtain_area_mm2: float
+    flow_coefficient: float
+    
+    # Forces
+    gas_force_n: float
+    spring_force_n: float
+    seat_force_n: float
+    
+    # Seat
+    seat_pressure_mpa: float
+    allowable_seat_pressure_mpa: float
+    
+    # Spring
+    spring_rate_n_mm: float
+    spring_natural_frequency_hz: float
+    spring_coil_bind_safety: float
+    
+    # Timing
+    overlap_deg: float
+    lift_area_mm2_deg: float
+    
+    # Material
+    material_name: str
+    max_temperature_c: float
+    valve_mass_g: float
+    
+    @property
+    def is_safe(self) -> bool:
+        return (self.seat_pressure_mpa <= self.allowable_seat_pressure_mpa and
+                self.spring_coil_bind_safety >= 1.2)
+    
+    def print_report(self):
+        print("=" * 75)
+        print("COMPLETE VALVE DESIGN REPORT")
+        print("=" * 75)
+        
+        print("\n VALVE GEOMETRY:")
+        print(f"   Head diameter: {self.head_diameter_mm:.1f} mm")
+        print(f"   Stem diameter: {self.stem_diameter_mm:.2f} mm")
+        print(f"   Seat angle: {self.seat_angle_deg:.0f}°")
+        print(f"   Seat width: {self.seat_width_mm:.3f} mm")
+        print(f"   Max lift: {self.max_lift_mm:.2f} mm")
+        print(f"   Head thickness: {self.head_thickness_mm:.2f} mm")
+        
+        print("\n FLOW CHARACTERISTICS:")
+        print(f"   Curtain area: {self.curtain_area_mm2:.1f} mm²")
+        print(f"   Flow coefficient (Cd): {self.flow_coefficient:.3f}")
+        
+        print("\n FORCES:")
+        print(f"   Gas force: {self.gas_force_n:.1f} N")
+        print(f"   Spring force: {self.spring_force_n:.1f} N")
+        print(f"   Seat force: {self.seat_force_n:.1f} N")
+        
+        print("\n VALVE SEAT:")
+        print(f"   Seat pressure: {self.seat_pressure_mpa:.1f} MPa")
+        print(f"   Allowable pressure: {self.allowable_seat_pressure_mpa:.0f} MPa")
+        seat_status = " OK" if self.seat_pressure_mpa <= self.allowable_seat_pressure_mpa else "⚠️ HIGH"
+        print(f"   Status: {seat_status}")
+        
+        print("\n VALVE SPRING:")
+        print(f"   Spring rate: {self.spring_rate_n_mm:.2f} N/mm")
+        print(f"   Natural frequency: {self.spring_natural_frequency_hz:.1f} Hz")
+        print(f"   Coil bind safety: {self.spring_coil_bind_safety:.2f}")
+        
+        print("\n⏱ VALVE TIMING:")
+        print(f"   Overlap: {self.overlap_deg:.0f}°")
+        print(f"   Lift area: {self.lift_area_mm2_deg:.0f} mm²·deg")
+        
+        print("\n MATERIAL:")
+        print(f"   Material: {self.material_name}")
+        print(f"   Max temp: {self.max_temperature_c}°C")
+        print(f"   Mass: {self.valve_mass_g:.1f} g")
+        
+        print("\n" + "=" * 75)
+        
+        if not self.is_safe:
+            print("\n DESIGN ISSUES:")
+            if self.seat_pressure_mpa > self.allowable_seat_pressure_mpa:
+                print("   - Seat pressure exceeds allowable")
+            if self.spring_coil_bind_safety < 1.2:
+                print("   - Spring coil bind risk")
+        else:
+            print("\n DESIGN ACCEPTABLE - All criteria satisfied")
+        
+        print("=" * 75)
+
+
+# ============================================================================
+# SECTION 8: COMPLETE VALVE DESIGNER
+# ============================================================================
+
+class ValveDesigner:
+    """Complete valve design from scratch."""
+    
+    def __init__(
+        self,
+        bore_mm: float,
+        head_diameter_mm: float,
+        max_cylinder_pressure_mpa: float,
+        max_rpm: float,
+        application: str = "intake",
+        material_name: Optional[str] = None,
+        seat_angle_deg: float = 45.0,
+        max_lift_mm: Optional[float] = None,
+    ):
+        self.bore_mm = bore_mm
+        self.head_diameter_mm = head_diameter_mm
+        self.max_pressure_mpa = max_cylinder_pressure_mpa
+        self.max_rpm = max_rpm
+        self.application = application
+        
+        # Auto-select material if not provided
+        if material_name is None:
+            if application == "exhaust":
+                material_name = "Silicon Chrome Steel (21-4N)"
+            else:
+                material_name = "Martensitic Steel (X45CrSi9-3)"
+        
+        self.material = get_valve_material(material_name)
+        self.geometry = ValveGeometry(head_diameter_mm, seat_angle_deg)
+        
+        if max_lift_mm is None:
+            max_lift_mm = 0.25 * head_diameter_mm
+        self.max_lift_mm = max_lift_mm
+        
+        self.valve_mass_kg = self.geometry.valve_mass_kg(self.material.density_kg_m3)
+        
+        self.forces = ValveForces(
+            head_diameter_mm=head_diameter_mm,
+            max_cylinder_pressure_mpa=max_cylinder_pressure_mpa,
+            max_rpm=max_rpm,
+            valve_mass_kg=self.valve_mass_kg,
+            max_lift_mm=max_lift_mm,
+        )
+        
+        self.spring = ValveSpring(
+            wire_diameter_mm=4.0,
+            mean_coil_diameter_mm=25.0,
+            active_coils=6,
+            free_length_mm=60.0,
+            installed_length_mm=40.0,
+        )
+        
+        self.seat = ValveSeat(head_diameter_mm, seat_angle_deg)
+        self.timing = ValveTiming(max_lift_mm)
+        
+        self.results = self._calculate_results()
+    
+    def _calculate_results(self) -> ValveDesignResult:
+        curtain = self.geometry.curtain_area_mm2(self.max_lift_mm)
+        
+        return ValveDesignResult(
+            head_diameter_mm=self.head_diameter_mm,
+            stem_diameter_mm=self.geometry.stem_diameter_mm,
+            seat_angle_deg=self.geometry.seat_angle_deg,
+            seat_width_mm=self.geometry.seat_width_mm,
+            max_lift_mm=self.max_lift_mm,
+            head_thickness_mm=self.geometry.head_thickness_mm,
+            margin_thickness_mm=self.geometry.margin_thickness_mm,
+            curtain_area_mm2=curtain,
+            flow_coefficient=self.geometry.flow_coefficient(self.max_lift_mm),
+            gas_force_n=self.forces.gas_force_n,
+            spring_force_n=self.forces.spring_force_n,
+            seat_force_n=self.forces.seat_force_n,
+            seat_pressure_mpa=self.seat.seat_pressure_mpa(self.forces.seat_force_n),
+            allowable_seat_pressure_mpa=ValveSeat.allowable_pressure_mpa(self.material.name),
+            spring_rate_n_mm=self.spring.spring_rate_n_mm,
+            spring_natural_frequency_hz=self.spring.natural_frequency_hz,
+            spring_coil_bind_safety=self.spring.coil_bind_safety(self.max_lift_mm),
+            overlap_deg=self.timing.overlap_deg,
+            lift_area_mm2_deg=self.timing.lift_area_mm2_deg,
+            material_name=self.material.name,
+            max_temperature_c=self.material.max_temperature_c,
+            valve_mass_g=self.valve_mass_kg * 1000,
+        )
+    
+    def get_results(self) -> ValveDesignResult:
+        return self.results
+    
+    def print_report(self):
+        self.results.print_report()
+
+
+# ============================================================================
+# EXAMPLE USAGE
 # ============================================================================
 
 if __name__ == "__main__":
-    print("=" * 70)
-    print("VALVE DESIGN CALCULATOR")
-    print("Machine Design Textbook - Chapter 32.22")
-    print("=" * 70)
-    
-    print("\n📌 Example: 2.0L Automotive Engine")
-    print("   Bore: 85 mm, Max Pressure: 8 MPa")
-    print("   Max RPM: 6500")
-    print("-" * 70)
-    
     # Intake valve
-    print("\n🔧 INTAKE VALVE DESIGN")
-    print("-" * 50)
-    
-    intake_valve = ValveComplete(
-        bore_mm=85,
-        head_diameter_mm=34,  # Typical intake valve size
+    intake = ValveDesigner(
+        bore_mm=85.0,
+        head_diameter_mm=34.0,
         max_cylinder_pressure_mpa=8.0,
         max_rpm=6500,
-        application="intake"
+        application="intake",
     )
-    intake_valve.print_design_report()
+    intake.print_report()
     
     # Exhaust valve
-    print("\n\n🔧 EXHAUST VALVE DESIGN")
-    print("-" * 50)
-    
-    exhaust_valve = ValveComplete(
-        bore_mm=85,
-        head_diameter_mm=30,  # Typical exhaust valve size
+    exhaust = ValveDesigner(
+        bore_mm=85.0,
+        head_diameter_mm=30.0,
         max_cylinder_pressure_mpa=8.0,
         max_rpm=6500,
         application="exhaust",
-        material_name="Silicon Chrome Steel (21-4N)"
+        material_name="Inconel 751",
     )
-    exhaust_valve.print_design_report()
-    
-    print("\n" + "=" * 70)
-    print("Valve design ready for engine integration.")
-    print("=" * 70)
+    exhaust.print_report()
