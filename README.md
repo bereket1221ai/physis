@@ -1,29 +1,24 @@
-# Physics - Engine Design Library
+# Physis - Physics for the AI Era
 
-Internal combustion engine design toolkit based on Machine Design textbook.
+**Complete Internal Combustion Engine Design Library**
 
-## Features
+Physis is a professional, open-source Python library for internal combustion engine design. Based on classical machine design textbooks and modern engineering standards, it provides complete analytical tools for designing engine components from first principles.
 
-- **Piston Design** - Head thickness, rings, skirt, thermal analysis
-- **Connecting Rod** - I-section optimization, buckling analysis, bearings
-- **Crankshaft** - Stress analysis, fillet design, fatigue life
-- **Cylinder** - Wall thickness, liner design, cooling system
-- **Valve Train** - Valve, spring, seat, timing analysis
-- **Thermodynamic Cycles** - Otto cycle, Diesel cycle, efficiency calculations
+### Core Modules
+| Module | Description |
+|--------|-------------|
+| **Stress Analysis** | Tensile, compressive, shear, torsional, bending stresses |
+| **Deformation** | Elastic constants, strain, Poisson's ratio, deflection |
+| **Failure Analysis** | Fatigue, Goodman/Soderberg criteria, stress concentration |
 
-## Quick Start
+### Engine Components
+| Component | Features |
+|-----------|----------|
+| **Piston** | Head thickness (Grashof, heat transfer, stress-based), rings, skirt, thermal analysis |
+| **Piston Pin** | Hollow pin optimization, bearing pressures, bending/shear stress, ovalization |
+| **Connecting Rod** | I-section optimization, Rankine buckling, whipping stress, bolts |
+| **Crankshaft** | Centre & side types, stress concentration, fatigue life (Goodman) |
+| **Cylinder** | Lame's thick cylinder, Fourier heat conduction, thermo-mechanical coupling |
+| **Valve Train** | Valve dynamics, spring design, seat pressure, timing |
+| **Thermodynamic Cycles** | Otto and Diesel cycles, efficiency, MEP, power prediction |
 
-```python
-from engine.ic_engine.piston import PistonComplete
-
-# Design a piston for 85mm bore engine
-piston = PistonComplete(
-    bore_mm=85,
-    stroke_mm=88,
-    max_gas_pressure_mpa=8.0,
-    max_rpm=6500,
-    reciprocating_mass_kg=0.45
-)
-
-# Get complete design report
-piston.print_design_report()
