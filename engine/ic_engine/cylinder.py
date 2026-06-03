@@ -1,7 +1,6 @@
 """
 cylinder.py - Complete Cylinder Design for Internal Combustion Engines
 
-Author: Bereket Gebrehawerya
 
 This module implements the complete cylinder design procedure from:
 - Machine Design Textbook (Chapter 32.3-32.4)
